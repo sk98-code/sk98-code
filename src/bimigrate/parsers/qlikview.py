@@ -197,8 +197,13 @@ class QlikViewParser(BaseParser):
         parsed = parse_load_script(script)
         for name, value in parsed.variables.items():
             inv.calculations.append(Calculation(name=name, expression=value, kind="variable"))
+        fields_by_table: dict[str, list[str]] = {}
+        for stmt in parsed.statements:
+            if stmt.kind in ("load", "select") and stmt.table_label:
+                bucket = fields_by_table.setdefault(stmt.table_label, [])
+                bucket.extend(f for f in stmt.fields if f not in bucket)
         for table in parsed.tables:
-            inv.tables.append(DataTable(name=table))
+            inv.tables.append(DataTable(name=table, columns=fields_by_table.get(table, [])))
         for qvd in parsed.qvd_reads:
             inv.connections.append(DataConnection(name=qvd, connection_type="qvd"))
         if parsed.has_section_access:

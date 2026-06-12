@@ -158,3 +158,79 @@ def test_agent_explanation_cites_repository():
     assert "FeatureMapping 'Set analysis'" in captured["prompt"]
     kb.close()
     repo.close()
+
+
+# -- Power BI Desktop compatibility regressions (real-world bug report) -------
+
+NETFLIX_TWB = """<?xml version='1.0' encoding='utf-8' ?>
+<workbook version='18.1'>
+  <datasources>
+    <datasource caption='netflix_titles' name='federated.1'>
+      <connection class='federated'>
+        <relation name='netflix_titles.csv' table='[netflix_titles#csv]' type='table'/>
+      </connection>
+      <column caption='Title' datatype='string' name='[title]' role='dimension'/>
+      <column caption='Titles per Year' datatype='real' name='[Calc_1]' role='measure'>
+        <calculation class='tableau' formula='{ FIXED [release_year] : COUNTD([title]) }'/>
+      </column>
+    </datasource>
+  </datasources>
+  <worksheets><worksheet name='Overview'><table><panes><pane id='1'>
+    <mark class='Bar'/></pane></panes></table></worksheet></worksheets>
+</workbook>
+"""
+
+
+def test_pbip_desktop_compatibility(tmp_path: Path):
+    """Pins the fixes for the Power BI Desktop rejection report:
+    wrong .pbip $schema, /// doc-comments after properties, blank lines
+    inside TMDL object bodies, and column-less stub tables."""
+    import re
+
+    twb = tmp_path / "Netfix Workbook.twb"
+    twb.write_text(NETFLIX_TWB)
+    inv = TableauParser().parse(twb)
+    kb = KnowledgeBase()
+    kb.init_from_seeds()
+    decisions = ConversionEngine(kb).convert_inventory(inv)
+    project = PbipEmitter(tmp_path / "out").emit(inv, build_model(inv, decisions))
+    kb.close()
+
+    # 1. .pbip $schema must match Desktop's pbipProperties pattern
+    pbip = json.loads((project / "Netfix Workbook.pbip").read_text())
+    assert re.fullmatch(
+        r"https://developer.microsoft.com/json-schemas/fabric/pbip/"
+        r"pbipProperties/1\.[0-9]+\.[0-9]+/schema\.json",
+        pbip["$schema"],
+    )
+
+    # 2. legacy report.json carries no $schema
+    report = json.loads((project / "Netfix Workbook.Report/report.json").read_text())
+    assert "$schema" not in report
+
+    tables_dir = project / "Netfix Workbook.SemanticModel/definition/tables"
+    tmdl_files = sorted(tables_dir.glob("*.tmdl"))
+    # 3. the column-less relation stub is dropped: one real table only
+    assert [f.stem for f in tmdl_files] == ["netflix_titles"]
+    text = tmdl_files[0].read_text()
+    lines = text.splitlines()
+
+    # 4. doc-comments precede their measure declaration
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("///"):
+            assert lines[i + 1].lstrip().startswith("measure "), line
+
+    # 5. no blank line inside an object body: a blank may only be followed
+    #    by a new object declaration (measure/column/partition) or EOF
+    object_starts = ("measure ", "column ", "partition ", "/// ", "table ")
+    for i, line in enumerate(lines[:-1]):
+        if not line.strip():
+            nxt = lines[i + 1].lstrip()
+            assert nxt.startswith(object_starts), f"blank line before: {nxt!r}"
+
+    # 6. measures attach to the real table and cite it (not 'Data')
+    assert "ALLEXCEPT('netflix_titles'" in text
+    assert "'Data'" not in text
+
+    # 7. every table has at least one column
+    assert "column " in text

@@ -42,6 +42,8 @@ class ConversionEngine:
         expression: str,
         artifact: str = "",
         feature_mapping: str | None = None,
+        table_hint: str | None = None,
+        field_resolver=None,
     ) -> ConversionDecision:
         dialect = _DIALECT_BY_TOOL.get(source_tool, "tableau")
         try:
@@ -49,7 +51,12 @@ class ConversionEngine:
         except ExpressionParseError as exc:
             return self._regex_fallback(source_tool, expression, artifact, str(exc), feature_mapping)
 
-        emitter = DaxEmitter(self.kb, source_tool, self.field_resolver, self.table_hint)
+        emitter = DaxEmitter(
+            self.kb,
+            source_tool,
+            field_resolver or self.field_resolver,
+            table_hint or self.table_hint,
+        )
         result = emitter.emit(ast)
         tier = tier_for_confidence(result.confidence)
         target = result.dax if tier != ConfidenceTier.MANUAL else None
@@ -130,6 +137,20 @@ class ConversionEngine:
     # -- batch over an inventory ------------------------------------------------
 
     def convert_inventory(self, inv: ArtifactInventory) -> list[ConversionDecision]:
+        # bind table hint + field resolver to the inventory's own model so
+        # emitted DAX cites real tables (ALLEXCEPT('Data',...) on a model
+        # without a 'Data' table fails evaluation in Power BI Desktop)
+        richest = max(inv.tables, key=lambda t: len(t.columns), default=None)
+        table_hint = richest.name if richest and richest.columns else self.table_hint
+        known_columns = {c.lower(): (t.name, c) for t in inv.tables for c in t.columns}
+
+        def resolver(name: str) -> str:
+            hit = known_columns.get(name.lower())
+            if hit:
+                table, column = hit
+                return f"'{table}'[{column}]"
+            return f"[{name}]"  # unresolved: emitter annotates the binding gap
+
         decisions = []
         for calc in inv.calculations:
             if calc.kind == "variable" and not _looks_like_expression(calc):
@@ -140,6 +161,8 @@ class ConversionEngine:
                     calc.expression,
                     artifact=f"{inv.artifact_name}/{calc.name}",
                     feature_mapping=_FEATURE_BY_KIND.get(calc.kind),
+                    table_hint=table_hint,
+                    field_resolver=resolver,
                 )
             )
         return decisions

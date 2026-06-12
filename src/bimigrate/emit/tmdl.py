@@ -61,8 +61,15 @@ def _q(name: str) -> str:
 
 
 def _indent(text: str, level: int) -> str:
+    """Indent every line; interior blank lines are dropped because Power BI
+    Desktop's TMDL parser rejects empty lines inside an object body."""
     pad = "\t" * level
-    return "\n".join(pad + line if line.strip() else line for line in text.splitlines())
+    return "\n".join(pad + line for line in text.splitlines() if line.strip())
+
+
+def _one_line(text: str) -> str:
+    """Doc-comments and property values must be single-line in TMDL."""
+    return " ".join(text.split())
 
 
 @dataclass
@@ -76,8 +83,10 @@ class TmdlModel:
     # -- rendering --------------------------------------------------------
 
     def render_model(self) -> str:
+        # canonical object name is `Model`; the artifact name lives in
+        # database.tmdl — Power BI Desktop follows the same convention
         lines = [
-            f"model {_q(self.name)}",
+            "model Model",
             f"\tculture: {self.culture}",
             "\tdefaultPowerBIDataSourceVersion: powerBI_V3",
             "\tsourceQueryCulture: en-US",
@@ -95,6 +104,11 @@ class TmdlModel:
         if table.is_date_table:
             out.append("\tdataCategory: Time")
         for measure in table.measures:
+            # TMDL doc-comments (///) must IMMEDIATELY PRECEDE the object
+            # declaration; emitting them after properties breaks Desktop's
+            # parser with InvalidLineType/Indentation errors.
+            if measure.description:
+                out.append(f"\t/// {_one_line(measure.description)}")
             expr = measure.expression
             if "\n" in expr:
                 out.append(f"\tmeasure {_q(measure.name)} =")
@@ -105,8 +119,6 @@ class TmdlModel:
                 out.append(f"\t\tformatString: {measure.format_string}")
             if measure.display_folder:
                 out.append(f"\t\tdisplayFolder: {measure.display_folder}")
-            if measure.description:
-                out.append(f"\t\t/// {measure.description}")
             out.append("")
         for col in table.columns:
             out.append(f"\tcolumn {_q(col.name)}")
@@ -121,8 +133,7 @@ class TmdlModel:
             out.append("\t\tmode: import")
             out.append("\t\tsource =")
             out.append(_indent(table.partition_m, 3))
-            out.append("")
-        return "\n".join(out) + "\n"
+        return "\n".join(out).rstrip("\n") + "\n"
 
     def render_relationships(self) -> str:
         out = []
@@ -135,10 +146,12 @@ class TmdlModel:
             out.append(f"\tfromColumn: {_q(rel.from_table)}.{_q(rel.from_column)}")
             out.append(f"\ttoColumn: {_q(rel.to_table)}.{_q(rel.to_column)}")
             out.append("")
-        return "\n".join(out) + "\n"
+        return "\n".join(out).rstrip("\n") + "\n"
 
     def render_role(self, role: TmdlRole) -> str:
-        out = [f"role {_q(role.name)}", "\tmodelPermission: read", ""]
+        # no blank line between properties: Desktop's TMDL parser rejects
+        # empty lines inside an object body
+        out = [f"role {_q(role.name)}", "\tmodelPermission: read"]
         for table, dax in role.table_filters.items():
             out.append(f"\ttablePermission {_q(table)} = {dax}")
         return "\n".join(out) + "\n"

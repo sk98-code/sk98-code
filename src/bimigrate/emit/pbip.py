@@ -72,7 +72,9 @@ class PbipEmitter:
         (root / f"{name}.pbip").write_text(
             json.dumps(
                 {
-                    "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/pbip/1.0.0/schema.json",
+                    # Desktop validates this against the pbipProperties pattern:
+                    # ^https://developer.microsoft.com/json-schemas/fabric/pbip/pbipProperties/1.x.y/schema.json$
+                    "$schema": "https://developer.microsoft.com/json-schemas/fabric/pbip/pbipProperties/1.0.0/schema.json",
                     "version": "1.0",
                     "artifacts": [{"report": {"path": f"{name}.Report"}}],
                     "settings": {"enableAutoRecovery": True},
@@ -173,8 +175,9 @@ class PbipEmitter:
                     "displayOption": 1,
                 }
             )
+        # legacy report.json format: no $schema property (Desktop rejects
+        # unknown schema URLs); theming travels inside the config string
         return {
-            "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/report/1.0.0/schema.json",
             "themeCollection": {
                 "customTheme": {"name": "migrated_theme.json", "type": "RegisteredResources"}
             },

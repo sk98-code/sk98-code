@@ -36,9 +36,14 @@ _DATATYPE_MAP = {
 def build_model(inv: ArtifactInventory, decisions: list[ConversionDecision]) -> TmdlModel:
     model = TmdlModel(name=inv.artifact_name)
 
-    # tables + columns
+    # tables + columns. When at least one source table carries columns,
+    # drop the column-less stubs (Tableau emits the physical relation as a
+    # separate column-less table alongside the datasource table); a TMDL
+    # table without columns will not open in Power BI Desktop.
+    with_columns = [t for t in inv.tables if t.columns]
+    candidates = with_columns or inv.tables
     seen_tables: dict[str, TmdlTable] = {}
-    for src_table in inv.tables:
+    for src_table in candidates:
         if src_table.name in seen_tables:
             continue
         table = TmdlTable(
@@ -48,8 +53,12 @@ def build_model(inv: ArtifactInventory, decisions: list[ConversionDecision]) -> 
         seen_tables[table.name] = table
         model.tables.append(table)
     if not model.tables:
-        model.tables.append(TmdlTable(name="Data", columns=[TmdlColumn(name="Value")]))
-    primary = model.tables[0]
+        model.tables.append(TmdlTable(name="Data"))
+    for table in model.tables:
+        if not table.columns:  # keep every emitted table Desktop-openable
+            table.columns.append(TmdlColumn(name="Value", is_hidden=True))
+    # measures attach to the richest table (most columns) — never to a stub
+    primary = max(model.tables, key=lambda t: len(t.columns))
 
     # partitions from converted load scripts (Qlik) or source connections
     qlik_scripts = [s for s in inv.scripts if s.language == "qlik-load-script"]
