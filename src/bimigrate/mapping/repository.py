@@ -33,7 +33,9 @@ CREATE TABLE IF NOT EXISTS feature_mappings (
 class MappingRepository:
     def __init__(self, db_path: Path | str = ":memory:"):
         self.db_path = str(db_path)
-        self._conn = sqlite3.connect(self.db_path)
+        # check_same_thread=False: the web app serves sync endpoints from a
+        # threadpool; access is read-mostly and writes are commit-per-call
+        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
 

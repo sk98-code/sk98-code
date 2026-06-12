@@ -15,6 +15,7 @@ dashboards and visuals.
 | Validation | `bimigrate validate <paths>` | accuracy per tier × complexity band, exception register, metadata round-trip checks |
 | Benchmark | `bimigrate benchmark` | conversion-accuracy regression gate over a golden corpus (48 seed cases + pilot-estate extensions) |
 | Collect | `bimigrate collect tableau\|qliksense` | server-side estate pull: workbooks/apps + schedules, subscriptions, alerts, streams, reload tasks |
+| Web app | `bimigrate web` | interactive UI: estate upload + discovery dashboard, expression→DAX playground, load-script→M converter, IronPython triage, mapping browser, benchmark runner, PBIP bundle download |
 
 Plus repository management: `bimigrate kb init|stats|add-rule` and `bimigrate mappings export`.
 
@@ -34,7 +35,8 @@ Additional engines beyond expression conversion:
 ## Quick start
 
 ```bash
-pip install -e ".[dev]"          # or .[agents] for the Anthropic-backed assistant
+pip install -e ".[dev,web]"      # .[agents] adds the Anthropic-backed assistant
+bimigrate web                    # interactive UI on http://127.0.0.1:8400
 bimigrate discover ./estate --scrub --workers 8
 bimigrate assess   ./estate
 bimigrate convert  ./estate --out out/converted
@@ -123,7 +125,7 @@ contradicts their confidence.
 
 ```bash
 pip install -e ".[dev]"
-pytest             # 61 tests: parsers, bulk engine, KB, conversion, emitters, collectors, benchmark, CLI
+pytest             # 66 tests: parsers, bulk engine, KB, conversion, emitters, collectors, benchmark, web API, CLI
 ruff check src tests && black --check src tests
 ```
 

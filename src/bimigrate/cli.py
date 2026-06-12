@@ -379,5 +379,20 @@ def collect_qliksense(server, user_directory, user_id, virtual_proxy, out) -> No
     console.print("note: pair QVF binaries with Engine JSON exports for full fidelity")
 
 
+@main.command()
+@click.option("--host", default="127.0.0.1", show_default=True)
+@click.option("--port", default=8400, show_default=True)
+def web(host, port) -> None:
+    """Launch the interactive web app (requires the [web] extra)."""
+    try:
+        from bimigrate.web.app import run
+    except ImportError as exc:
+        raise click.ClickException(
+            "web dependencies missing — install with: pip install 'bimigrate[web]'"
+        ) from exc
+    console.print(f"bimigrate web UI on [cyan]http://{host}:{port}[/] (Ctrl+C to stop)")
+    run(host=host, port=port)
+
+
 if __name__ == "__main__":
     main()

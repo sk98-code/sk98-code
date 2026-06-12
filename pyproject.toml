@@ -22,7 +22,8 @@ dependencies = [
 
 [project.optional-dependencies]
 agents = ["anthropic>=0.40"]
-dev = ["pytest>=8.0", "ruff>=0.4", "black>=24.0"]
+web = ["fastapi>=0.110", "uvicorn>=0.29", "python-multipart>=0.0.9"]
+dev = ["pytest>=8.0", "ruff>=0.4", "black>=24.0", "httpx>=0.27"]
 
 [project.scripts]
 bimigrate = "bimigrate.cli:main"
@@ -32,6 +33,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "bimigrate.kb" = ["data/*.json"]
+"bimigrate.web" = ["static/*.html"]
 
 [tool.ruff]
 line-length = 110

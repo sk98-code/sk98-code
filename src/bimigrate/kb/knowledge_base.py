@@ -19,6 +19,10 @@ from pathlib import Path
 
 from bimigrate.models.core import ConversionRule, tier_for_confidence
 
+# rule-id prefixes must be unique per tool: qlikview/qliksense share seeds
+# but need distinct rows so rules_for_tool() works for both
+RULE_PREFIX = {"tableau": "tabl", "spotfire": "spot", "qlikview": "qlik", "qliksense": "qsen"}
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS functions (
     source_tool TEXT NOT NULL,
@@ -56,7 +60,9 @@ CREATE TABLE IF NOT EXISTS conversion_rules (
 class KnowledgeBase:
     def __init__(self, db_path: Path | str = ":memory:"):
         self.db_path = str(db_path)
-        self._conn = sqlite3.connect(self.db_path)
+        # check_same_thread=False: the web app serves sync endpoints from a
+        # threadpool; access is read-mostly and writes are commit-per-call
+        self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
 
@@ -92,7 +98,7 @@ class KnowledgeBase:
                 # every mapped function becomes a data-driven conversion rule
                 if template or dax_name:
                     rule = ConversionRule(
-                        rule_id=f"{tool[:4]}-fn-{name.lower()}",
+                        rule_id=f"{RULE_PREFIX[tool]}-fn-{name.lower()}",
                         source_tool=tool,
                         source_pattern=rf"(?i)\b{name}\s*\(",
                         source_example=sig,
