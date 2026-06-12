@@ -21,10 +21,32 @@ def client():
 def test_index_and_info(client):
     page = client.get("/")
     assert page.status_code == 200
-    assert "bimigrate" in page.text and "Expression → DAX" in page.text
+    assert "bimigrate" in page.text
+    if 'id="root"' in page.text:  # React build present: bundle must be servable
+        import re
+
+        asset = re.search(r'src="(/assets/[^"]+\.js)"', page.text)
+        assert asset, "built index.html must reference a JS bundle"
+        bundle = client.get(asset.group(1))
+        assert bundle.status_code == 200
+        assert "Expression" in bundle.text  # UI strings live in the bundle
+    else:  # vanilla fallback page carries the strings inline
+        assert "Expression → DAX" in page.text
     info = client.get("/api/info").json()
     assert info["kb"]["conversion_rules"] >= 500
     assert ".twb" in info["extensions"]
+
+
+def test_discover_tool_filter(client):
+    client.post("/api/reset")
+    files = [
+        ("files", ("sales.twb", TWB_XML.encode(), "application/xml")),
+        ("files", ("reload.qvs", QVS_SCRIPT.encode(), "text/plain")),
+    ]
+    client.post("/api/upload", files=files)
+    only_tableau = client.post("/api/discover", params={"tool": "tableau"}).json()
+    assert {a["tool"] for a in only_tableau["artifacts"]} == {"tableau"}
+    client.post("/api/reset")
 
 
 def test_upload_discover_convert_roundtrip(client):

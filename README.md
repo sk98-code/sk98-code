@@ -15,7 +15,7 @@ dashboards and visuals.
 | Validation | `bimigrate validate <paths>` | accuracy per tier × complexity band, exception register, metadata round-trip checks |
 | Benchmark | `bimigrate benchmark` | conversion-accuracy regression gate over a golden corpus (48 seed cases + pilot-estate extensions) |
 | Collect | `bimigrate collect tableau\|qliksense` | server-side estate pull: workbooks/apps + schedules, subscriptions, alerts, streams, reload tasks |
-| Web app | `bimigrate web` | interactive UI: estate upload + discovery dashboard, expression→DAX playground, load-script→M converter, IronPython triage, mapping browser, benchmark runner, PBIP bundle download |
+| Web app | `bimigrate web` | interactive React UI: pick the source platform, then a guided wizard — upload → discovery → mappings → expression playground → platform-specific tools (load-script→M, IronPython triage) → convert & PBIP download |
 
 Plus repository management: `bimigrate kb init|stats|add-rule` and `bimigrate mappings export`.
 
@@ -120,6 +120,22 @@ contradicts their confidence.
 - Pixel-perfect layout is a non-goal; structural + functional parity is the goal.
 - Full-fidelity `.qvw`/`.qvf` extraction requires the -prj folder / Engine JSON
   export paths; binary containers are parsed best-effort with explicit issues.
+
+## Web UI development
+
+The frontend is a Vite + React app in `webui/` (built bundle is committed to
+`src/bimigrate/web/static/dist` so `pip install` users need no Node toolchain):
+
+```bash
+cd webui && npm install
+npm run dev      # dev server on :5173, /api proxied to bimigrate web on :8400
+npm run build    # rebuild the bundle served by `bimigrate web`
+```
+
+The workspace is scoped to the selected source platform: sidebar steps, file
+types, expression dialect and the mapping matrix all follow the selection, and
+platform-only tools (Qlik load scripts, Spotfire IronPython) appear only where
+they apply.
 
 ## Development
 

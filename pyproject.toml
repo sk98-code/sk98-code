@@ -33,7 +33,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "bimigrate.kb" = ["data/*.json"]
-"bimigrate.web" = ["static/*.html"]
+"bimigrate.web" = ["static/*.html", "static/dist/*", "static/dist/assets/*"]
 
 [tool.ruff]
 line-length = 110

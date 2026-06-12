@@ -6,218 +6,428 @@
 <title>bimigrate — BI Migration Platform</title>
 <style>
 :root{
-  --bg:#0f1420; --panel:#171e2e; --panel2:#1d2638; --border:#2a3650;
-  --text:#e6ebf5; --muted:#8b97ad; --accent:#4da3ff; --accent2:#7c5cff;
-  --auto:#2ea35f; --assisted:#c9930a; --manual:#d64550; --mono:'Consolas','Menlo',monospace;
+  --bg:#0c1018; --bg2:#0f1420; --panel:#141a28; --panel2:#1b2334; --border:#27324a;
+  --text:#e8edf6; --muted:#8b97ad; --accent:#4da3ff; --accent2:#7c5cff;
+  --auto:#2ea35f; --assisted:#c9930a; --manual:#d64550;
+  --pc:#4da3ff; /* platform accent, set per selection */
+  --mono:'Cascadia Code','Consolas','Menlo',monospace;
+  --shadow:0 10px 30px rgba(0,0,0,.35);
 }
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 'Segoe UI',system-ui,sans-serif}
-header{display:flex;align-items:center;gap:14px;padding:14px 22px;background:var(--panel);border-bottom:1px solid var(--border)}
-header h1{font-size:17px;margin:0;font-weight:600}
-header h1 span{color:var(--accent)}
-header .sub{color:var(--muted);font-size:12px}
-nav{display:flex;gap:4px;padding:0 22px;background:var(--panel);border-bottom:1px solid var(--border)}
-nav button{background:none;border:none;color:var(--muted);padding:10px 14px;cursor:pointer;font-size:13px;border-bottom:2px solid transparent}
-nav button.active{color:var(--text);border-bottom-color:var(--accent)}
-main{padding:20px 22px;max-width:1200px;margin:0 auto}
-.tab{display:none}.tab.active{display:block}
-.card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px}
-.card h2{margin:0 0 10px;font-size:14px;font-weight:600}
-.row{display:flex;gap:16px;flex-wrap:wrap}
-.row .card{flex:1;min-width:280px}
-.stat{display:inline-block;margin-right:22px}
-.stat b{display:block;font-size:22px}
-.stat span{color:var(--muted);font-size:12px}
-table{border-collapse:collapse;width:100%;font-size:13px}
-th,td{padding:6px 9px;text-align:left;border-bottom:1px solid var(--border)}
-th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.4px}
-tr:hover td{background:var(--panel2)}
-.tier{display:inline-block;padding:1px 9px;border-radius:10px;font-size:11px;font-weight:700}
-.tier.AUTO{background:rgba(46,163,95,.18);color:#54d98a}
-.tier.ASSISTED{background:rgba(201,147,10,.18);color:#ffd45e}
-.tier.MANUAL{background:rgba(214,69,80,.18);color:#ff8b94}
+html,body{height:100%}
+body{margin:0;background:radial-gradient(1100px 500px at 70% -10%,#16203a 0%,var(--bg) 55%);color:var(--text);
+  font:14px/1.55 'Segoe UI',system-ui,-apple-system,sans-serif}
+button{font:inherit}
+.muted{color:var(--muted)} .err{color:#ff8b94}
+.mono{font-family:var(--mono)}
+pre{background:#0a0e17;border:1px solid var(--border);border-radius:8px;padding:12px 14px;overflow-x:auto;
+  font-family:var(--mono);font-size:12.5px;white-space:pre-wrap;word-break:break-word;margin:8px 0}
+.tier{display:inline-block;padding:1px 10px;border-radius:11px;font-size:11px;font-weight:700;letter-spacing:.3px}
+.tier.AUTO{background:rgba(46,163,95,.16);color:#54d98a;border:1px solid rgba(46,163,95,.35)}
+.tier.ASSISTED{background:rgba(201,147,10,.16);color:#ffd45e;border:1px solid rgba(201,147,10,.35)}
+.tier.MANUAL{background:rgba(214,69,80,.16);color:#ff8b94;border:1px solid rgba(214,69,80,.35)}
 .band-simple{color:#54d98a}.band-medium{color:#ffd45e}.band-complex{color:#ff8b94}
-textarea,select,input[type=text]{background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:7px;padding:9px;font-family:var(--mono);font-size:13px;width:100%}
-textarea{resize:vertical}
-select{width:auto;font-family:inherit}
-button.primary{background:linear-gradient(135deg,var(--accent),var(--accent2));border:none;color:#fff;padding:9px 18px;border-radius:7px;cursor:pointer;font-weight:600;font-size:13px}
-button.primary:disabled{opacity:.45;cursor:default}
-button.ghost{background:none;border:1px solid var(--border);color:var(--muted);padding:8px 14px;border-radius:7px;cursor:pointer;font-size:13px}
-pre{background:#0b101b;border:1px solid var(--border);border-radius:7px;padding:12px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;white-space:pre-wrap;word-break:break-word;margin:8px 0}
-.annot{color:var(--muted);font-size:12.5px;margin:3px 0;padding-left:14px;position:relative}
-.annot:before{content:"›";position:absolute;left:2px;color:var(--accent)}
-.drop{border:2px dashed var(--border);border-radius:10px;padding:26px;text-align:center;color:var(--muted);cursor:pointer;transition:.15s}
-.drop.over,.drop:hover{border-color:var(--accent);color:var(--text)}
-.pill{display:inline-block;background:var(--panel2);border:1px solid var(--border);border-radius:12px;padding:2px 10px;margin:2px;font-size:12px;font-family:var(--mono)}
-.muted{color:var(--muted)}
-.err{color:#ff8b94}
-details summary{cursor:pointer;color:var(--accent);font-size:13px}
-.bar{height:8px;border-radius:4px;background:var(--panel2);overflow:hidden;margin-top:4px}
-.bar i{display:block;height:100%}
-.controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
-.flag{font-size:11.5px;font-family:var(--mono);color:var(--muted)}
-.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px}
+.pill{display:inline-block;background:var(--panel2);border:1px solid var(--border);border-radius:12px;
+  padding:2px 10px;margin:2px;font-size:12px;font-family:var(--mono)}
+.annot{color:var(--muted);font-size:12.5px;margin:3px 0;padding-left:15px;position:relative}
+.annot:before{content:"›";position:absolute;left:3px;color:var(--pc)}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--pc);
+  border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px}
 @keyframes s{to{transform:rotate(360deg)}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{padding:7px 10px;text-align:left;border-bottom:1px solid var(--border)}
+th{color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.6px}
+tr:hover td{background:rgba(255,255,255,.02)}
+textarea,input[type=text]{background:var(--panel2);border:1px solid var(--border);color:var(--text);
+  border-radius:8px;padding:10px;font-family:var(--mono);font-size:13px;width:100%}
+textarea:focus,input:focus{outline:none;border-color:var(--pc)}
+textarea{resize:vertical}
+select{background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:8px 10px}
+.btn{background:linear-gradient(135deg,var(--pc),var(--accent2));border:none;color:#fff;padding:9px 20px;
+  border-radius:8px;cursor:pointer;font-weight:600;font-size:13px;transition:.15s}
+.btn:hover{filter:brightness(1.12)} .btn:disabled{opacity:.4;cursor:default;filter:none}
+.btn.ghost{background:none;border:1px solid var(--border);color:var(--muted)}
+.btn.ghost:hover{color:var(--text);border-color:var(--pc)}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px;margin-bottom:16px}
+.card h3{margin:0 0 10px;font-size:14px;font-weight:600}
+.stat{display:inline-block;margin:0 26px 8px 0}
+.stat b{display:block;font-size:23px;font-weight:650}
+.stat span{color:var(--muted);font-size:12px}
+details summary{cursor:pointer;color:var(--pc);font-size:13px}
+.bar{height:8px;border-radius:4px;background:var(--panel2);overflow:hidden;margin-top:8px;display:flex}
+.bar i{display:block;height:100%}
+
+/* ---------- platform select view ---------- */
+#view-select{min-height:100%;display:flex;flex-direction:column;align-items:center;padding:48px 24px}
+.brand{display:flex;align-items:center;gap:10px;margin-bottom:40px;align-self:flex-start}
+.brand .logo{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,var(--accent),var(--accent2));
+  display:grid;place-items:center;font-weight:800;font-size:16px}
+.brand b{font-size:16px} .brand span{color:var(--muted);font-size:12px}
+.hero{text-align:center;max-width:760px;animation:fadeUp .4s ease}
+.hero h1{font-size:30px;margin:0 0 10px;font-weight:650;letter-spacing:-.4px}
+.hero h1 em{font-style:normal;background:linear-gradient(90deg,var(--accent),var(--accent2));
+  -webkit-background-clip:text;background-clip:text;color:transparent}
+.hero p{color:var(--muted);margin:0 0 36px;font-size:15px}
+.plat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(235px,1fr));gap:18px;max-width:1080px;width:100%;
+  animation:fadeUp .5s ease}
+.plat{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:22px;cursor:pointer;
+  text-align:left;transition:.18s;position:relative;overflow:hidden}
+.plat:hover{transform:translateY(-4px);border-color:var(--c);box-shadow:var(--shadow)}
+.plat:before{content:"";position:absolute;inset:0 0 auto 0;height:3px;background:var(--c)}
+.plat .mono-badge{width:46px;height:46px;border-radius:11px;background:color-mix(in srgb,var(--c) 18%,transparent);
+  border:1px solid color-mix(in srgb,var(--c) 45%,transparent);color:var(--c);display:grid;place-items:center;
+  font-weight:800;font-size:19px;margin-bottom:14px}
+.plat h2{margin:0 0 2px;font-size:16.5px;font-weight:650}
+.plat .vendor{color:var(--muted);font-size:12px;margin-bottom:12px}
+.plat ul{margin:0 0 14px;padding:0;list-style:none}
+.plat li{color:var(--muted);font-size:12.5px;padding:2.5px 0 2.5px 16px;position:relative}
+.plat li:before{content:"✓";position:absolute;left:0;color:var(--c);font-size:11px}
+.plat .exts{margin-bottom:14px}
+.plat .exts .pill{font-size:11px;padding:1px 8px}
+.plat .go{display:flex;align-items:center;gap:8px;color:var(--c);font-weight:600;font-size:13px}
+.plat .go:after{content:"→";transition:.18s}
+.plat:hover .go:after{transform:translateX(4px)}
+.target-note{margin-top:34px;color:var(--muted);font-size:13px;display:flex;align-items:center;gap:10px}
+.pbi{display:inline-grid;place-items:center;width:26px;height:26px;border-radius:7px;background:#f2c811;color:#1a1a1a;
+  font-weight:800;font-size:12px}
+
+/* ---------- workspace view ---------- */
+#view-work{display:none;height:100vh;grid-template-columns:248px 1fr}
+#view-work.active{display:grid}
+aside{background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:18px 14px}
+.ws-plat{display:flex;align-items:center;gap:11px;padding:10px;border-radius:11px;background:var(--panel);
+  border:1px solid var(--border);margin-bottom:6px}
+.ws-plat .mono-badge{width:38px;height:38px;border-radius:9px;background:color-mix(in srgb,var(--pc) 18%,transparent);
+  border:1px solid color-mix(in srgb,var(--pc) 45%,transparent);color:var(--pc);display:grid;place-items:center;
+  font-weight:800;font-size:15px}
+.ws-plat b{font-size:13.5px;display:block}
+.ws-plat .to{color:var(--muted);font-size:11.5px}
+.change{color:var(--muted);font-size:12px;background:none;border:none;cursor:pointer;text-align:left;
+  padding:4px 10px 14px;text-decoration:underline dotted}
+.change:hover{color:var(--pc)}
+.nav-label{color:var(--muted);font-size:10.5px;text-transform:uppercase;letter-spacing:1px;padding:12px 10px 6px}
+.step-btn{display:flex;align-items:center;gap:11px;width:100%;background:none;border:none;color:var(--muted);
+  padding:9px 10px;border-radius:9px;cursor:pointer;font-size:13.2px;text-align:left;transition:.12s;margin:1px 0}
+.step-btn:hover{background:var(--panel);color:var(--text)}
+.step-btn.active{background:color-mix(in srgb,var(--pc) 13%,transparent);color:var(--text);font-weight:600}
+.step-btn .n{width:21px;height:21px;border-radius:50%;border:1.5px solid var(--border);display:grid;place-items:center;
+  font-size:11px;color:var(--muted);flex:none;transition:.12s}
+.step-btn.active .n{border-color:var(--pc);color:var(--pc)}
+.step-btn.done .n{background:var(--pc);border-color:var(--pc);color:#fff}
+aside .foot{margin-top:auto;padding:10px;color:var(--muted);font-size:11.5px;border-top:1px solid var(--border)}
+main{overflow-y:auto;padding:26px 34px}
+.step-head{display:flex;align-items:center;gap:14px;margin-bottom:18px}
+.step-head h1{font-size:19px;margin:0;font-weight:650}
+.step-head .crumb{color:var(--muted);font-size:12.5px}
+.step-head .wiz{margin-left:auto;display:flex;gap:8px}
+.panel{display:none;animation:fadeUp .25s ease}
+.panel.active{display:block}
+.drop{border:2px dashed var(--border);border-radius:13px;padding:34px;text-align:center;color:var(--muted);
+  cursor:pointer;transition:.15s;background:rgba(255,255,255,.012)}
+.drop.over,.drop:hover{border-color:var(--pc);color:var(--text)}
+.drop b{color:var(--pc)}
+.controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:14px 0}
+.row{display:flex;gap:16px;flex-wrap:wrap}
+.row .card{flex:1;min-width:300px}
+.flag{font-size:11.5px;font-family:var(--mono);color:var(--muted)}
+.empty{border:1px dashed var(--border);border-radius:12px;padding:30px;text-align:center;color:var(--muted)}
 </style>
 </head>
 <body>
-<header>
-  <h1>bi<span>migrate</span></h1>
-  <div class="sub">Tableau · Spotfire · QlikView · Qlik Sense → Power BI / Fabric</div>
-  <div style="margin-left:auto" class="sub" id="kbStats"></div>
-</header>
-<nav>
-  <button data-tab="estate" class="active">Estate</button>
-  <button data-tab="playground">Expression → DAX</button>
-  <button data-tab="script">Load Script → M</button>
-  <button data-tab="ironpython">IronPython Triage</button>
-  <button data-tab="mappings">Feature Mappings</button>
-  <button data-tab="benchmark">Benchmark</button>
-</nav>
-<main>
 
-<!-- ESTATE -->
-<section class="tab active" id="tab-estate">
-  <div class="card">
-    <h2>1 · Upload source files</h2>
-    <div class="drop" id="drop">Drop .twb / .twbx / .dxp / .qvw / .qvs / .qvf / .json files here, or click to choose</div>
-    <input type="file" id="fileInput" multiple hidden>
-    <div id="uploadList" style="margin-top:8px"></div>
+<!-- ============ VIEW 1: PLATFORM SELECT ============ -->
+<section id="view-select">
+  <div class="brand"><div class="logo">b</div><div><b>bimigrate</b><br><span>Enterprise BI Migration Platform</span></div></div>
+  <div class="hero">
+    <h1>Where are you migrating <em>from</em>?</h1>
+    <p>Select your source platform. The workspace adapts to its feature surface — calculations, scripts,
+       security and scheduling — and converts everything it can to Power BI / Microsoft Fabric with
+       confidence-tiered decisions.</p>
   </div>
-  <div class="controls">
-    <button class="primary" id="btnDiscover">Run discovery</button>
-    <label class="muted"><input type="checkbox" id="scrub"> scrub sensitive metadata</label>
-    <button class="primary" id="btnConvert" disabled>Convert estate → PBIP</button>
-    <button class="ghost" id="btnReset">Reset workspace</button>
-    <span id="estateStatus" class="muted"></span>
-  </div>
-  <div class="row" id="estateSummary" style="display:none">
-    <div class="card"><h2>Estate summary</h2><div id="summaryStats"></div></div>
-    <div class="card"><h2>Near-duplicate clusters</h2><div id="clusters" class="muted">—</div></div>
-  </div>
-  <div class="card" id="artifactsCard" style="display:none">
-    <h2>Artifacts by complexity</h2>
-    <table id="artifactsTable"><thead><tr>
-      <th>Artifact</th><th>Tool</th><th>Band</th><th>Score</th><th>Effort h</th>
-      <th>Visuals</th><th>Calcs</th><th>Scripts</th><th>Security</th><th></th>
-    </tr></thead><tbody></tbody></table>
-  </div>
-  <div class="card" id="convertCard" style="display:none">
-    <h2>Conversion result</h2>
-    <div id="convertSummary"></div>
-    <div id="decisionList" style="margin-top:10px"></div>
-  </div>
+  <div class="plat-grid" id="platGrid"></div>
+  <div class="target-note"><span>Migration target:</span> <span class="pbi">PB</span>
+    <b>Power BI / Microsoft Fabric</b> <span class="muted">· PBIP projects · TMDL semantic models · DAX · Power Query M · RLS</span></div>
 </section>
 
-<!-- PLAYGROUND -->
-<section class="tab" id="tab-playground">
-  <div class="card">
-    <h2>Expression → DAX playground</h2>
-    <div class="controls">
-      <select id="pgTool">
-        <option value="tableau">Tableau</option>
-        <option value="qlikview">QlikView</option>
-        <option value="qliksense">Qlik Sense</option>
-        <option value="spotfire">Spotfire</option>
-      </select>
-      <input type="text" id="pgTable" value="Sales" style="width:140px" title="table hint">
-      <button class="primary" id="btnPg">Convert</button>
-      <span class="muted">examples:</span><span id="pgExamples"></span>
+<!-- ============ VIEW 2: WORKSPACE ============ -->
+<section id="view-work">
+  <aside>
+    <div class="ws-plat"><div class="mono-badge" id="wsBadge">T</div>
+      <div><b id="wsName">Tableau</b><span class="to">→ Power BI / Fabric</span></div></div>
+    <button class="change" id="btnChange">← change source platform</button>
+    <div class="nav-label">Migration steps</div>
+    <div id="stepNav"></div>
+    <div class="nav-label">Quality</div>
+    <div id="qualityNav"></div>
+    <div class="foot" id="kbStats">…</div>
+  </aside>
+  <main>
+    <div class="step-head">
+      <h1 id="stepTitle"></h1><span class="crumb" id="stepCrumb"></span>
+      <div class="wiz"><button class="btn ghost" id="btnBack">← Back</button>
+        <button class="btn" id="btnNext">Next →</button></div>
     </div>
-    <textarea id="pgExpr" rows="4" placeholder="{ FIXED [Customer] : SUM([Sales]) }"></textarea>
-    <div id="pgResult"></div>
-  </div>
-</section>
 
-<!-- LOAD SCRIPT -->
-<section class="tab" id="tab-script">
-  <div class="card">
-    <h2>Qlik load script → Power Query M</h2>
-    <div class="controls">
-      <button class="primary" id="btnScript">Convert script</button>
-      <button class="ghost" id="btnScriptSample">Load sample</button>
-      <span id="scriptRate" class="muted"></span>
+    <!-- upload -->
+    <div class="panel" id="p-upload">
+      <div class="card">
+        <h3>Upload your <span id="upPlatName"></span> estate</h3>
+        <div class="drop" id="drop">Drop <b id="dropExts"></b> files here, or <b>click to browse</b>
+          <div class="muted" style="margin-top:6px;font-size:12px" id="dropHint"></div></div>
+        <input type="file" id="fileInput" multiple hidden>
+        <div id="uploadList" style="margin-top:10px"></div>
+        <div id="uploadMsg"></div>
+      </div>
+      <div class="card"><h3>Privacy</h3>
+        <label class="muted"><input type="checkbox" id="scrub" checked>
+          Scrub mode — pseudonymize servers/principals and strip credentials, emails and IPs before anything is stored or reported</label>
+      </div>
     </div>
-    <textarea id="scriptIn" rows="12" placeholder="Sales:&#10;LOAD OrderID, Amount FROM [lib://Data/sales.qvd] (qvd) WHERE Year(OrderDate) >= 2020;"></textarea>
-    <div id="scriptResult"></div>
-  </div>
-</section>
 
-<!-- IRONPYTHON -->
-<section class="tab" id="tab-ironpython">
-  <div class="card">
-    <h2>IronPython intent triage <span class="tier MANUAL">always MANUAL</span></h2>
-    <p class="muted">Scripts are never auto-converted; this classifies intent from Document API calls and recommends the Power Platform rebuild path.</p>
-    <div class="controls">
-      <button class="primary" id="btnIp">Classify</button>
-      <button class="ghost" id="btnIpSample">Load sample</button>
+    <!-- discover -->
+    <div class="panel" id="p-discover">
+      <div class="controls">
+        <button class="btn" id="btnDiscover">Run discovery</button>
+        <button class="btn ghost" id="btnReset">Reset workspace</button>
+        <span id="estateStatus" class="muted"></span>
+      </div>
+      <div class="empty" id="discoverEmpty">Upload files in step 1, then run discovery to inventory the estate —
+        complexity scoring, feature flags, near-duplicate clusters and effort estimates.</div>
+      <div class="row" id="estateSummary" style="display:none">
+        <div class="card"><h3>Estate summary</h3><div id="summaryStats"></div></div>
+        <div class="card"><h3>Near-duplicate clusters <span class="muted">(migrate-one, retire-many)</span></h3>
+          <div id="clusters" class="muted">—</div></div>
+      </div>
+      <div class="card" id="artifactsCard" style="display:none">
+        <h3>Artifacts by complexity</h3>
+        <table id="artifactsTable"><thead><tr>
+          <th>Artifact</th><th>Band</th><th>Score</th><th>Effort h</th>
+          <th>Visuals</th><th>Calcs</th><th>Scripts</th><th>Security</th><th></th>
+        </tr></thead><tbody></tbody></table>
+      </div>
     </div>
-    <textarea id="ipIn" rows="10" placeholder="from Spotfire.Dxp.Application.Visuals import TablePlot ..."></textarea>
-    <div id="ipResult"></div>
-  </div>
-</section>
 
-<!-- MAPPINGS -->
-<section class="tab" id="tab-mappings">
-  <div class="card">
-    <h2>Feature Mapping Repository</h2>
-    <div class="controls">
-      <select id="mapTool"><option value="">all tools</option>
-        <option>tableau</option><option>spotfire</option><option>qlikview</option><option>qliksense</option></select>
-      <select id="mapTier"><option value="">all tiers</option>
-        <option>AUTO</option><option>ASSISTED</option><option>MANUAL</option></select>
-      <span id="mapCount" class="muted"></span>
+    <!-- mappings -->
+    <div class="panel" id="p-mappings">
+      <div class="card">
+        <h3>Feature mapping matrix — <span id="mapPlatName"></span> → Power BI</h3>
+        <div class="controls">
+          <select id="mapTier"><option value="">all tiers</option>
+            <option>AUTO</option><option>ASSISTED</option><option>MANUAL</option></select>
+          <select id="mapLayer"><option value="">all layers</option></select>
+          <span id="mapCount" class="muted"></span>
+        </div>
+        <table id="mapTable"><thead><tr>
+          <th>Feature</th><th>Layer</th><th>Power BI equivalent</th><th>Tier</th><th>Fallback / notes</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
     </div>
-    <table id="mapTable"><thead><tr>
-      <th>Feature</th><th>Tool</th><th>Layer</th><th>Power BI equivalent</th><th>Tier</th><th>Fallback / notes</th>
-    </tr></thead><tbody></tbody></table>
-  </div>
+
+    <!-- expression playground -->
+    <div class="panel" id="p-expression">
+      <div class="card">
+        <h3>Expression → DAX playground <span class="muted" id="pgDialect"></span></h3>
+        <div class="controls">
+          <input type="text" id="pgTable" value="Sales" style="width:150px" title="fact table hint">
+          <button class="btn" id="btnPg">Convert to DAX</button>
+          <span class="muted">try:</span><span id="pgExamples"></span>
+        </div>
+        <textarea id="pgExpr" rows="4"></textarea>
+        <div id="pgResult"></div>
+      </div>
+    </div>
+
+    <!-- load script (qlik only) -->
+    <div class="panel" id="p-script">
+      <div class="card">
+        <h3>Load script → Power Query M</h3>
+        <div class="controls">
+          <button class="btn" id="btnScript">Convert script</button>
+          <button class="btn ghost" id="btnScriptSample">Load sample</button>
+          <span id="scriptRate" class="muted"></span>
+        </div>
+        <textarea id="scriptIn" rows="12" placeholder="Sales:&#10;LOAD OrderID, Amount FROM [lib://Data/sales.qvd] (qvd) WHERE Year(OrderDate) >= 2020;"></textarea>
+        <div id="scriptResult"></div>
+      </div>
+    </div>
+
+    <!-- ironpython (spotfire only) -->
+    <div class="panel" id="p-ironpython">
+      <div class="card">
+        <h3>IronPython triage <span class="tier MANUAL">always MANUAL</span></h3>
+        <p class="muted">Scripts are never auto-converted; intent is classified from Document API calls with a
+          Power Automate / bookmarks / Fabric rebuild recommendation per script.</p>
+        <div class="controls">
+          <button class="btn" id="btnIp">Classify</button>
+          <button class="btn ghost" id="btnIpSample">Load sample</button>
+        </div>
+        <textarea id="ipIn" rows="10"></textarea>
+        <div id="ipResult"></div>
+      </div>
+    </div>
+
+    <!-- convert -->
+    <div class="panel" id="p-convert">
+      <div class="controls">
+        <button class="btn" id="btnConvert">Convert estate → PBIP</button>
+        <span id="convStatus" class="muted"></span>
+      </div>
+      <div class="empty" id="convertEmpty">Run discovery first; conversion emits PBIP projects with TMDL semantic
+        models, DAX measures, M partitions and RLS proposals — every expression decision is confidence-tiered.</div>
+      <div class="card" id="convertCard" style="display:none">
+        <h3>Conversion result</h3>
+        <div id="convertSummary"></div>
+        <div id="decisionList" style="margin-top:12px"></div>
+      </div>
+    </div>
+
+    <!-- benchmark -->
+    <div class="panel" id="p-benchmark">
+      <div class="card">
+        <h3>Conversion-accuracy benchmark <span class="muted">(golden corpus · per tier × band, never blended)</span></h3>
+        <div class="controls"><button class="btn" id="btnBench">Run benchmark</button><span id="benchStatus"></span></div>
+        <div id="benchResult"></div>
+      </div>
+    </div>
+  </main>
 </section>
 
-<!-- BENCHMARK -->
-<section class="tab" id="tab-benchmark">
-  <div class="card">
-    <h2>Conversion-accuracy benchmark <span class="muted">(golden corpus, per tier × band — never blended)</span></h2>
-    <div class="controls"><button class="primary" id="btnBench">Run benchmark</button><span id="benchStatus"></span></div>
-    <div id="benchResult"></div>
-  </div>
-</section>
-
-</main>
 <script>
 const $=s=>document.querySelector(s), esc=t=>String(t??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const api=async(url,opts={})=>{const r=await fetch(url,opts);if(!r.ok){let d;try{d=(await r.json()).detail}catch{d=r.statusText}throw new Error(d)}return r.json()};
 const tierPill=t=>`<span class="tier ${t}">${t}</span>`;
 
-// tabs
-document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
-  document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("active",x===b));
-  document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active",x.id==="tab-"+b.dataset.tab));
-});
+/* ---------------- platform registry ---------------- */
+const PLATFORMS={
+  tableau:{label:"Tableau",vendor:"Salesforce · Desktop / Server / Cloud",color:"#E97627",mono:"T",
+    exts:[".twb",".twbx"],hint:"workbooks & packaged workbooks — Server estates via `bimigrate collect tableau`",
+    feats:["Dashboards, stories & actions","Calculated fields, LOD & table calcs","User filters → RLS roles","Extracts, custom SQL & schedules"],
+    steps:["upload","discover","mappings","expression","convert"],
+    examples:["{ FIXED [Customer] : SUM([Sales]) }","RUNNING_SUM(SUM([Sales]))",
+      "IF [Sales]>100 THEN 'High' ELSEIF [Sales]>50 THEN 'Mid' ELSE 'Low' END","DATEDIFF('month', [Start], [End])"]},
+  spotfire:{label:"Spotfire",vendor:"TIBCO / Cloud Software Group",color:"#0E94D2",mono:"S",
+    exts:[".dxp"],hint:"analysis files — library estates via the Library REST API",
+    feats:["Pages, visuals & cross tables","OVER expressions & THEN chains","TERR / R / Python data functions","IronPython automation triage"],
+    steps:["upload","discover","mappings","expression","ironpython","convert"],
+    examples:["Sum([Sales]) OVER (AllPrevious([OrderDate]))","Sum([Sales]) / Sum([Sales]) OVER (All([Axis.X]))",
+      "CASE WHEN [Amount] > 100 THEN 'High' ELSE 'Low' END"]},
+  qlikview:{label:"QlikView",vendor:"Qlik · desktop & Publisher",color:"#149B5F",mono:"Q",
+    exts:[".qvw",".qvs"],hint:"documents & load scripts — pair .qvw with its -prj folder for full fidelity",
+    feats:["Set analysis & alternate states","Load scripts → Power Query M","Section Access → RLS roles","QVD pipelines → Lakehouse medallion"],
+    steps:["upload","discover","mappings","expression","script","convert"],
+    examples:["Sum({<Year={2024}>} Sales)","Avg(Aggr(Sum(Sales), Customer))",
+      "Sum({State1<Year={2024}>} Sales)","Sum(TOTAL Sales)"]},
+  qliksense:{label:"Qlik Sense",vendor:"Qlik · client-managed & SaaS",color:"#54B948",mono:"QS",
+    exts:[".qvf",".json"],hint:"apps & Engine JSON exports — server estates via `bimigrate collect qliksense`",
+    feats:["Master measures & dimensions","Set analysis & variables","Load scripts → Power Query M","Streams & Section Access → workspaces + RLS"],
+    steps:["upload","discover","mappings","expression","script","convert"],
+    examples:["Count(DISTINCT CustomerID)","Sum({<Region-={'EU'}, Year=>} Amount)","If(Sum(Sales) > 1000, 'High', 'Low')"]},
+};
+const STEP_META={
+  upload:{title:"Upload estate",nav:"Upload estate"},
+  discover:{title:"Discovery & assessment",nav:"Discovery"},
+  mappings:{title:"Feature mappings",nav:"Feature mappings"},
+  expression:{title:"Expression → DAX",nav:"Expression → DAX"},
+  script:{title:"Load script → Power Query M",nav:"Load script → M"},
+  ironpython:{title:"IronPython triage",nav:"IronPython triage"},
+  convert:{title:"Convert & export",nav:"Convert & export"},
+};
+let PLAT=null, STEPS=[], stepIdx=0, discovered=false;
 
-// header stats
-api("/api/info").then(i=>{$("#kbStats").textContent=
-  `${i.kb.conversion_rules} rules · ${i.kb.functions} functions · ${i.mappings} mappings`;renderUploads(i.uploads)});
+/* ---------------- platform select view ---------------- */
+$("#platGrid").innerHTML=Object.entries(PLATFORMS).map(([k,p])=>`
+  <button class="plat" style="--c:${p.color}" data-k="${k}">
+    <div class="mono-badge">${p.mono}</div>
+    <h2>${p.label}</h2><div class="vendor">${p.vendor}</div>
+    <div class="exts">${p.exts.map(e=>`<span class="pill">${e}</span>`).join("")}</div>
+    <ul>${p.feats.map(f=>`<li>${f}</li>`).join("")}</ul>
+    <span class="go">Start migration</span>
+  </button>`).join("");
+document.querySelectorAll(".plat").forEach(b=>b.onclick=()=>enterWorkspace(b.dataset.k));
 
-// ---- estate ----
+function enterWorkspace(key){
+  PLAT=PLATFORMS[key]; PLAT.key=key; STEPS=PLAT.steps; stepIdx=0; discovered=false;
+  document.documentElement.style.setProperty("--pc",PLAT.color);
+  $("#view-select").style.display="none"; $("#view-work").classList.add("active");
+  $("#wsBadge").textContent=PLAT.mono; $("#wsName").textContent=PLAT.label;
+  $("#upPlatName").textContent=PLAT.label; $("#mapPlatName").textContent=PLAT.label;
+  $("#dropExts").textContent=PLAT.exts.join(" / "); $("#dropHint").textContent=PLAT.hint;
+  $("#fileInput").accept=PLAT.exts.join(",");
+  $("#pgDialect").textContent=`· ${PLAT.label} dialect`;
+  $("#pgExpr").value=PLAT.examples[0]; renderExamples();
+  $("#stepNav").innerHTML=STEPS.map((s,i)=>
+    `<button class="step-btn" data-i="${i}"><span class="n">${i+1}</span>${STEP_META[s].nav}</button>`).join("");
+  document.querySelectorAll("#stepNav .step-btn").forEach(b=>b.onclick=()=>showStep(+b.dataset.i));
+  $("#qualityNav").innerHTML=`<button class="step-btn" data-q="benchmark"><span class="n">✓</span>Benchmark</button>`;
+  $("#qualityNav .step-btn").onclick=()=>showStep(-1);
+  loadMappings(); resetEstateUI();
+  showStep(0);
+}
+$("#btnChange").onclick=async()=>{try{await api("/api/reset",{method:"POST"})}catch{};location.reload()};
+
+function showStep(i){
+  const benchmark=i<0;
+  stepIdx=benchmark?stepIdx:i;
+  const stepKey=benchmark?"benchmark":STEPS[i];
+  document.querySelectorAll(".panel").forEach(p=>p.classList.toggle("active",p.id==="p-"+stepKey));
+  document.querySelectorAll("#stepNav .step-btn").forEach((b,bi)=>{
+    b.classList.toggle("active",!benchmark&&bi===i);
+    b.classList.toggle("done",bi<stepIdx||(bi===0&&uploadedCount>0&&bi<stepIdx));
+  });
+  $("#qualityNav .step-btn").classList.toggle("active",benchmark);
+  $("#stepTitle").textContent=benchmark?"Conversion-accuracy benchmark":STEP_META[stepKey].title;
+  $("#stepCrumb").textContent=benchmark?`${PLAT.label} → Power BI`:
+    `${PLAT.label} → Power BI · step ${i+1} of ${STEPS.length}`;
+  $("#btnBack").disabled=benchmark||i===0;
+  $("#btnNext").disabled=benchmark||i===STEPS.length-1;
+  $("#btnNext").textContent=benchmark?"Next →":(i===STEPS.length-1?"Done":"Next →");
+}
+$("#btnBack").onclick=()=>showStep(Math.max(0,stepIdx-1));
+$("#btnNext").onclick=()=>showStep(Math.min(STEPS.length-1,stepIdx+1));
+
+/* ---------------- header stats ---------------- */
+api("/api/info").then(i=>{$("#kbStats").innerHTML=
+  `${i.kb.conversion_rules} conversion rules · ${i.kb.functions} functions<br>${i.mappings} feature mappings`;
+  renderUploads(i.uploads||[]);}).catch(()=>{});
+
+/* ---------------- upload ---------------- */
+let uploadedCount=0;
 const drop=$("#drop"),fi=$("#fileInput");
 drop.onclick=()=>fi.click();
 ["dragover","dragleave","drop"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.toggle("over",ev==="dragover");}));
 drop.addEventListener("drop",e=>uploadFiles(e.dataTransfer.files));
 fi.onchange=()=>uploadFiles(fi.files);
-function renderUploads(names){$("#uploadList").innerHTML=names.length?names.map(n=>`<span class="pill">${esc(n)}</span>`).join(""):"";}
+function renderUploads(names){
+  const mine=PLAT?names.filter(n=>PLAT.exts.some(e=>n.toLowerCase().endsWith(e))):names;
+  uploadedCount=mine.length;
+  $("#uploadList").innerHTML=mine.map(n=>`<span class="pill">${esc(n)}</span>`).join("")||"";
+}
 async function uploadFiles(files){
   const fd=new FormData();[...files].forEach(f=>fd.append("files",f));
-  const res=await api("/api/upload",{method:"POST",body:fd});
-  if(res.rejected.length)$("#estateStatus").innerHTML=`<span class="err">skipped (unsupported): ${esc(res.rejected.join(", "))}</span>`;
-  api("/api/info").then(i=>renderUploads(i.uploads));
+  try{
+    const res=await api("/api/upload",{method:"POST",body:fd});
+    $("#uploadMsg").innerHTML=res.rejected.length
+      ?`<div class="err">skipped (unsupported): ${esc(res.rejected.join(", "))}</div>`:"";
+    const info=await api("/api/info"); renderUploads(info.uploads);
+    if(res.saved.length)$("#uploadMsg").innerHTML+=`<div class="muted">${res.saved.length} file(s) saved — continue to Discovery →</div>`;
+  }catch(e){$("#uploadMsg").innerHTML=`<div class="err">${esc(e.message)}</div>`}
 }
-$("#btnReset").onclick=async()=>{await api("/api/reset",{method:"POST"});location.reload()};
+function resetEstateUI(){
+  ["#estateSummary","#artifactsCard","#convertCard"].forEach(s=>$(s).style.display="none");
+  $("#discoverEmpty").style.display="block";$("#convertEmpty").style.display="block";
+  $("#uploadList").innerHTML="";$("#uploadMsg").innerHTML="";
+}
+$("#btnReset").onclick=async()=>{await api("/api/reset",{method:"POST"});resetEstateUI();discovered=false;
+  api("/api/info").then(i=>renderUploads(i.uploads));};
+
+/* ---------------- discovery ---------------- */
 $("#btnDiscover").onclick=async()=>{
   $("#estateStatus").innerHTML='<span class="spin"></span> parsing estate…';
   try{
-    const d=await api("/api/discover?scrub="+$("#scrub").checked,{method:"POST"});
-    $("#estateStatus").textContent="";$("#btnConvert").disabled=false;
+    const d=await api(`/api/discover?scrub=${$("#scrub").checked}&tool=${PLAT.key}`,{method:"POST"});
+    discovered=true;$("#estateStatus").textContent="";
+    $("#discoverEmpty").style.display="none";
     $("#estateSummary").style.display="flex";$("#artifactsCard").style.display="block";
     const bands={simple:0,medium:0,complex:0};d.artifacts.forEach(a=>bands[a.band]++);
     $("#summaryStats").innerHTML=
@@ -233,19 +443,22 @@ $("#btnDiscover").onclick=async()=>{
       ? d.clusters.map(c=>`migrate <b>${esc(c.representative)}</b> → retire ${c.retire.map(esc).join(", ")}`).join("<br>")
         +`<div class="muted" style="margin-top:6px">dedup saves ~${d.savings.saved_effort_hours}h (${d.savings.savings_pct}%)</div>`
       : "no near-duplicates found";
-    $("#artifactsTable tbody").innerHTML=d.artifacts.map((a,i)=>`
-      <tr><td>${esc(a.name)}</td><td>${a.tool}</td><td class="band-${a.band}">${a.band}</td>
+    $("#artifactsTable tbody").innerHTML=d.artifacts.map(a=>`
+      <tr><td>${esc(a.name)}</td><td class="band-${a.band}">${a.band}</td>
       <td>${a.score.toFixed(1)}</td><td>${a.effort_hours}</td><td>${a.visuals}</td>
       <td>${a.calculations}</td><td>${a.scripts}</td><td>${a.security}</td>
       <td><details><summary>flags</summary><div>${Object.entries(a.feature_flags).map(([k,v])=>`<div class="flag">${esc(k)}: ${v}</div>`).join("")||"—"}
       ${a.issues.map(x=>`<div class="annot">${esc(x)}</div>`).join("")}</div></details></td></tr>`).join("");
   }catch(e){$("#estateStatus").innerHTML=`<span class="err">${esc(e.message)}</span>`}
 };
+
+/* ---------------- convert ---------------- */
 $("#btnConvert").onclick=async()=>{
-  $("#estateStatus").innerHTML='<span class="spin"></span> converting…';
+  if(!discovered){$("#convStatus").innerHTML='<span class="err">run discovery first (step 2)</span>';return}
+  $("#convStatus").innerHTML='<span class="spin"></span> converting…';
   try{
     const d=await api("/api/convert-estate",{method:"POST"});
-    $("#estateStatus").textContent="";$("#convertCard").style.display="block";
+    $("#convStatus").textContent="";$("#convertEmpty").style.display="none";$("#convertCard").style.display="block";
     const t={AUTO:0,ASSISTED:0,MANUAL:0};d.decisions.forEach(x=>t[x.tier]++);
     const total=Math.max(d.decisions.length,1);
     $("#convertSummary").innerHTML=
@@ -253,30 +466,24 @@ $("#btnConvert").onclick=async()=>{
       `<span class="stat"><b style="color:#54d98a">${t.AUTO}</b><span>AUTO</span></span>`+
       `<span class="stat"><b style="color:#ffd45e">${t.ASSISTED}</b><span>ASSISTED</span></span>`+
       `<span class="stat"><b style="color:#ff8b94">${t.MANUAL}</b><span>MANUAL</span></span>`+
-      `<a href="${d.download}" style="margin-left:18px" class="pill">⬇ download PBIP bundle (.zip)</a>`+
-      `<div class="bar"><i style="width:${100*t.AUTO/total}%;background:var(--auto);float:left"></i><i style="width:${100*t.ASSISTED/total}%;background:var(--assisted);float:left"></i><i style="width:${100*t.MANUAL/total}%;background:var(--manual);float:left"></i></div>`;
+      `<a href="${d.download}" class="pill" style="margin-left:14px">⬇ download PBIP bundle (.zip)</a>`+
+      `<div class="bar"><i style="width:${100*t.AUTO/total}%;background:var(--auto)"></i><i style="width:${100*t.ASSISTED/total}%;background:var(--assisted)"></i><i style="width:${100*t.MANUAL/total}%;background:var(--manual)"></i></div>`;
     $("#decisionList").innerHTML=d.decisions.map(x=>`
       <details><summary>${tierPill(x.tier)} <code>${esc(x.source_expression.slice(0,90))}</code> <span class="muted">(${esc(x.source_artifact)})</span></summary>
       ${x.target_expression?`<pre>${esc(x.target_expression)}</pre>`:`<pre class="err">${esc(x.fallback_strategy||"manual")}</pre>`}
       <div class="muted">confidence ${x.confidence} · rule: ${esc(x.rule_id||"—")}</div>
       ${x.annotations.map(a=>`<div class="annot">${esc(a)}</div>`).join("")}</details>`).join("");
-  }catch(e){$("#estateStatus").innerHTML=`<span class="err">${esc(e.message)}</span>`}
+  }catch(e){$("#convStatus").innerHTML=`<span class="err">${esc(e.message)}</span>`}
 };
 
-// ---- playground ----
-const EXAMPLES={
-  tableau:["{ FIXED [Customer] : SUM([Sales]) }","RUNNING_SUM(SUM([Sales]))","IF [Sales]>100 THEN 'High' ELSEIF [Sales]>50 THEN 'Mid' ELSE 'Low' END","DATEDIFF('month', [Start], [End])"],
-  qlikview:["Sum({<Year={2024}>} Sales)","Avg(Aggr(Sum(Sales), Customer))","Sum({State1<Year={2024}>} Sales)","Sum(TOTAL Sales)"],
-  qliksense:["Count(DISTINCT CustomerID)","Sum({<Region-={'EU'}, Year=>} Amount)","If(Sum(Sales) > 1000, 'High', 'Low')"],
-  spotfire:["Sum([Sales]) OVER (AllPrevious([OrderDate]))","Sum([Sales]) / Sum([Sales]) OVER (All([Axis.X]))","CASE WHEN [Amount] > 100 THEN 'High' ELSE 'Low' END"]};
-function renderExamples(){const t=$("#pgTool").value;$("#pgExamples").innerHTML=
-  EXAMPLES[t].map(e=>`<span class="pill" style="cursor:pointer" onclick="document.querySelector('#pgExpr').value=this.dataset.e" data-e="${esc(e)}">${esc(e.slice(0,34))}${e.length>34?"…":""}</span>`).join("");}
-$("#pgTool").onchange=renderExamples;renderExamples();
+/* ---------------- playground ---------------- */
+function renderExamples(){$("#pgExamples").innerHTML=
+  PLAT.examples.map(e=>`<span class="pill" style="cursor:pointer" onclick="document.querySelector('#pgExpr').value=this.dataset.e" data-e="${esc(e)}">${esc(e.slice(0,36))}${e.length>36?"…":""}</span>`).join("");}
 $("#btnPg").onclick=async()=>{
   $("#pgResult").innerHTML='<span class="spin"></span>';
   try{
     const d=await api("/api/convert-expression",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({tool:$("#pgTool").value,expression:$("#pgExpr").value,table_hint:$("#pgTable").value||"Data"})});
+      body:JSON.stringify({tool:PLAT.key,expression:$("#pgExpr").value,table_hint:$("#pgTable").value||"Data"})});
     $("#pgResult").innerHTML=`
       <div style="margin:10px 0">${tierPill(d.tier)} <span class="muted">confidence ${d.confidence} · cited rule: <code>${esc(d.rule_id||"—")}</code></span></div>
       ${d.target_expression?`<pre>${esc(d.target_expression)}</pre>`:`<pre class="err">${esc(d.fallback_strategy||"not converted")}</pre>`}
@@ -286,7 +493,7 @@ $("#btnPg").onclick=async()=>{
   }catch(e){$("#pgResult").innerHTML=`<pre class="err">${esc(e.message)}</pre>`}
 };
 
-// ---- load script ----
+/* ---------------- load script ---------------- */
 $("#btnScriptSample").onclick=()=>{$("#scriptIn").value=
 `SET vMaxYear = 2024;
 
@@ -315,14 +522,14 @@ $("#btnScript").onclick=async()=>{
       body:JSON.stringify({script:$("#scriptIn").value})});
     $("#scriptRate").textContent=`statement conversion rate: ${(d.conversion_rate*100).toFixed(0)}%`;
     $("#scriptResult").innerHTML=
-      d.queries.map(q=>`<div class="card"><h2>${esc(q.name)} <span class="muted">confidence ${q.confidence}</span></h2>
+      d.queries.map(q=>`<div class="card"><h3>${esc(q.name)} <span class="muted">confidence ${q.confidence}</span></h3>
         <pre>${esc(q.m_code)}</pre>${q.annotations.map(a=>`<div class="annot">${esc(a)}</div>`).join("")}</div>`).join("")
-      +(d.annotations.length?`<div class="card"><h2>Script-level notes</h2>${d.annotations.map(a=>`<div class="annot">${esc(a)}</div>`).join("")}</div>`:"")
-      +(d.unconverted.length?`<div class="card"><h2 class="err">Unconverted blocks</h2>${d.unconverted.map(u=>`<div class="annot"><code>${esc(u.text)}</code> — ${esc(u.reason)}</div>`).join("")}</div>`:"");
+      +(d.annotations.length?`<div class="card"><h3>Script-level notes</h3>${d.annotations.map(a=>`<div class="annot">${esc(a)}</div>`).join("")}</div>`:"")
+      +(d.unconverted.length?`<div class="card"><h3 class="err">Unconverted blocks</h3>${d.unconverted.map(u=>`<div class="annot"><code>${esc(u.text)}</code> — ${esc(u.reason)}</div>`).join("")}</div>`:"");
   }catch(e){$("#scriptResult").innerHTML=`<pre class="err">${esc(e.message)}</pre>`}
 };
 
-// ---- ironpython ----
+/* ---------------- ironpython ---------------- */
 $("#btnIpSample").onclick=()=>{$("#ipIn").value=
 `from Spotfire.Dxp.Application.Visuals import TablePlot
 import smtplib
@@ -341,19 +548,25 @@ $("#btnIp").onclick=async()=>{
     ${d.api_calls.map(c=>`<div class="annot">line ${c.line}: <b>${esc(c.intent)}</b> — ${esc(c.recommendation)}</div>`).join("")}`;
 };
 
-// ---- mappings ----
+/* ---------------- mappings ---------------- */
 async function loadMappings(){
-  const tool=$("#mapTool").value,tier=$("#mapTier").value;
-  const rows=await api(`/api/mappings?${tool?`tool=${tool}&`:""}${tier?`tier=${tier}`:""}`);
-  $("#mapCount").textContent=rows.length+" mappings";
-  $("#mapTable tbody").innerHTML=rows.map(m=>`
-    <tr><td>${esc(m.feature_name)}</td><td>${m.source_tool}</td><td>${esc(m.source_layer)}</td>
+  const tier=$("#mapTier").value,layer=$("#mapLayer").value;
+  const rows=await api(`/api/mappings?tool=${PLAT.key}${tier?`&tier=${tier}`:""}`);
+  const layers=[...new Set(rows.map(m=>m.source_layer))].sort();
+  if($("#mapLayer").options.length<=1||$("#mapLayer").dataset.plat!==PLAT.key){
+    $("#mapLayer").innerHTML='<option value="">all layers</option>'+layers.map(l=>`<option>${l}</option>`).join("");
+    $("#mapLayer").dataset.plat=PLAT.key;
+  }
+  const filtered=layer?rows.filter(m=>m.source_layer===layer):rows;
+  $("#mapCount").textContent=filtered.length+" mappings";
+  $("#mapTable tbody").innerHTML=filtered.map(m=>`
+    <tr><td>${esc(m.feature_name)}</td><td>${esc(m.source_layer)}</td>
     <td>${m.powerbi_equivalent?esc(m.powerbi_equivalent):'<span class="err">(no native equivalent)</span>'}</td>
     <td>${tierPill(m.tier)}</td><td class="muted">${esc(m.fallback_strategy||m.notes||"")}</td></tr>`).join("");
 }
-$("#mapTool").onchange=loadMappings;$("#mapTier").onchange=loadMappings;loadMappings();
+$("#mapTier").onchange=loadMappings;$("#mapLayer").onchange=loadMappings;
 
-// ---- benchmark ----
+/* ---------------- benchmark ---------------- */
 $("#btnBench").onclick=async()=>{
   $("#benchStatus").innerHTML='<span class="spin"></span>';
   const d=await api("/api/benchmark",{method:"POST"});
@@ -364,7 +577,7 @@ $("#btnBench").onclick=async()=>{
     <table style="margin-top:10px"><thead><tr><th>Expected tier</th><th>Band</th><th>Total</th><th>Passed</th><th>Accuracy</th></tr></thead>
     <tbody>${d.accuracy_matrix.map(r=>`<tr><td>${tierPill(r.tier)}</td><td class="band-${r.complexity_band}">${r.complexity_band}</td>
       <td>${r.total}</td><td>${r.passed}</td><td>${r.accuracy_pct}%</td></tr>`).join("")}</tbody></table>
-    ${d.failures.length?`<div class="card" style="margin-top:10px"><h2 class="err">Failures</h2>
+    ${d.failures.length?`<div class="card" style="margin-top:10px"><h3 class="err">Failures</h3>
       ${d.failures.map(f=>`<div class="annot"><code>${esc(f.expression)}</code> expected ${f.expected_tier}, got ${f.actual_tier}</div>`).join("")}</div>`:""}`;
 };
 </script>

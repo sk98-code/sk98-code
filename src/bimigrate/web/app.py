@@ -69,10 +69,25 @@ def create_app() -> FastAPI:
     app.state.bimigrate = state
 
     # -- frontend ---------------------------------------------------------
+    # Preferred UI is the built React bundle (webui/ -> static/dist via
+    # `npm run build`); the vanilla single-file page remains as a fallback
+    # so the package works without a Node toolchain.
 
-    @app.get("/", response_class=HTMLResponse)
-    def index() -> str:
-        return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    dist_dir = STATIC_DIR / "dist"
+    if (dist_dir / "index.html").is_file():
+        from fastapi.staticfiles import StaticFiles
+
+        app.mount("/assets", StaticFiles(directory=dist_dir / "assets"), name="assets")
+
+        @app.get("/", response_class=HTMLResponse)
+        def index() -> str:
+            return (dist_dir / "index.html").read_text(encoding="utf-8")
+
+    else:  # pragma: no cover - exercised only in no-build installs
+
+        @app.get("/", response_class=HTMLResponse)
+        def index() -> str:
+            return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
     # -- estate -------------------------------------------------------------
 
@@ -100,7 +115,7 @@ def create_app() -> FastAPI:
         return {"saved": saved, "rejected": rejected}
 
     @app.post("/api/discover")
-    def discover(scrub: bool = False) -> dict:
+    def discover(scrub: bool = False, tool: str | None = None) -> dict:
         uploads = sorted((state.workspace / "uploads").iterdir())
         if not uploads:
             raise HTTPException(400, "no files uploaded yet")
@@ -111,6 +126,8 @@ def create_app() -> FastAPI:
                 continue
             try:
                 inv = score_inventory(parser.parse(path))
+                if tool and inv.source_tool.value != tool:
+                    continue  # workspace is scoped to one source platform
                 if scrub:
                     scrub_inventory(inv)
                 inventories.append(inv)
