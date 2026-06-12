@@ -291,5 +291,93 @@ def mappings_export(db, out) -> None:
     console.print(f"{count} mappings -> [cyan]{excel}[/], [cyan]{json_path}[/]")
 
 
+@main.command()
+@click.option("--out", default="out/benchmark", show_default=True)
+@click.option(
+    "--corpus",
+    multiple=True,
+    type=click.Path(exists=True),
+    help="extra golden-case JSON files (pilot estates)",
+)
+def benchmark(out, corpus) -> None:
+    """Run the conversion-accuracy benchmark corpus (regression gate for the KB)."""
+    from bimigrate.validate.benchmark import run_benchmark
+
+    result = run_benchmark(extra_files=[Path(c) for c in corpus])
+    table = Table(title=f"Benchmark: {result.passed}/{result.total} cases passed")
+    for col in ("Expected tier", "Band", "Total", "Passed", "Accuracy %"):
+        table.add_column(col)
+    for row in result.report.accuracy_matrix():
+        table.add_row(
+            row["tier"],
+            row["complexity_band"],
+            str(row["total"]),
+            str(row["passed"]),
+            str(row["accuracy_pct"]),
+        )
+    console.print(table)
+    for failure in result.failures:
+        console.print(
+            f"[red]FAIL[/] [{failure['tool']}] {failure['expression'][:70]} "
+            f"(expected {failure['expected_tier']}, got {failure['actual_tier']})"
+        )
+    out_dir = Path(out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "benchmark_report.json"
+    path.write_text(json.dumps(result.to_dict(), indent=2), encoding="utf-8")
+    console.print(f"  wrote [cyan]{path}[/]")
+    if result.failures:
+        raise SystemExit(1)
+
+
+@main.group()
+def collect() -> None:
+    """Server-side estate collectors (Tableau Server / Qlik Sense QRS)."""
+
+
+@collect.command("tableau")
+@click.option("--server", required=True, help="https://tableau.example.com")
+@click.option("--site", default="", show_default=True, help="site contentUrl ('' = default)")
+@click.option("--pat-name", required=True, envvar="TABLEAU_PAT_NAME")
+@click.option("--pat-secret", required=True, envvar="TABLEAU_PAT_SECRET")
+@click.option("--out", default="out/collected/tableau", show_default=True)
+def collect_tableau(server, site, pat_name, pat_secret, out) -> None:
+    """Download workbooks + schedules/subscriptions/alerts via the REST API."""
+    from bimigrate.collect import TableauServerClient
+
+    client = TableauServerClient(server, site)
+    client.sign_in(pat_name, pat_secret)
+    try:
+        items = client.collect_estate(Path(out))
+    finally:
+        client.sign_out()
+    workbooks = [i for i in items if i.kind == "workbook"]
+    console.print(
+        f"collected [bold]{len(workbooks)}[/] workbooks, "
+        f"{len(items) - len(workbooks)} schedule/subscription/alert records -> [cyan]{out}[/]"
+    )
+    console.print("next: bimigrate discover " + out)
+
+
+@collect.command("qliksense")
+@click.option("--server", required=True, help="https://qlik.example.com")
+@click.option("--user-directory", required=True, envvar="QLIK_USER_DIRECTORY")
+@click.option("--user-id", required=True, envvar="QLIK_USER_ID")
+@click.option("--virtual-proxy", default="", show_default=True)
+@click.option("--out", default="out/collected/qliksense", show_default=True)
+def collect_qliksense(server, user_directory, user_id, virtual_proxy, out) -> None:
+    """Export apps + streams/reload tasks via the QRS API."""
+    from bimigrate.collect import QlikQrsClient
+
+    client = QlikQrsClient(server, user_directory, user_id, virtual_proxy)
+    items = client.collect_estate(Path(out))
+    apps = [i for i in items if i.kind == "app"]
+    console.print(
+        f"collected [bold]{len(apps)}[/] apps, "
+        f"{len(items) - len(apps)} stream/task records -> [cyan]{out}[/]"
+    )
+    console.print("note: pair QVF binaries with Engine JSON exports for full fidelity")
+
+
 if __name__ == "__main__":
     main()

@@ -1,0 +1,39 @@
+SET ThousandSep=',';
+SET DecimalSep='.';
+LET vMaxYear = Year(Today());
+
+SECTION ACCESS;
+LOAD * INLINE [
+ACCESS, USERID, REGION
+USER, DOMAIN\ALICE, EU
+USER, DOMAIN\BOB, US
+];
+SECTION APPLICATION;
+
+MapRegion:
+MAPPING LOAD * INLINE [
+Code, Region
+1, EU
+2, US
+];
+
+Sales:
+LOAD
+    OrderID,
+    CustomerID,
+    ApplyMap('MapRegion', RegionCode, 'Other') AS Region,
+    Amount,
+    OrderDate
+FROM [lib://Data/sales.qvd] (qvd)
+WHERE Year(OrderDate) >= 2020;
+
+Customers:
+LOAD CustomerID,
+     CustomerName
+FROM [customers.csv] (txt, codepage is 65001, embedded labels, delimiter is ',');
+
+LEFT JOIN (Sales)
+LOAD CustomerID, Segment RESIDENT Customers;
+
+STORE Sales INTO [lib://Data/sales_clean.qvd] (qvd);
+DROP TABLE Customers;

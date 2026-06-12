@@ -289,7 +289,20 @@ class DaxEmitter:
             axis = "[Axis.X]"
             if nav.args and isinstance(nav.args[0], (FieldRef, Ident)):
                 axis = self.resolve(getattr(nav.args[0], "name"))
-            if kb_row and kb_row["dax_template"]:
+            if method.lower() == "intersect":
+                # ASSISTED with mandatory review (Section 6 realism constraint):
+                # emit a CALCULATE skeleton with one filter slot per intersected
+                # node-navigation argument instead of dropping to MANUAL.
+                arg_names = ", ".join(
+                    a.name if isinstance(a, (FieldRef, Ident)) else type(a).__name__ for a in nav.args
+                )
+                result.dax = (
+                    f"CALCULATE({inner}, " f"/* Intersect({arg_names}): one filter argument per hierarchy */)"
+                )
+                result.confidence = min(result.confidence, 0.60)
+                result.rule_ids.append("spot-over-intersect-custom")
+                result.annotations.append("OVER Intersect with hierarchies: mandatory review")
+            elif kb_row and kb_row["dax_template"]:
                 result.dax = kb_row["dax_template"].replace("{0}", inner).replace("{1}", axis)
                 result.confidence = min(result.confidence, kb_row["confidence"])
                 result.rule_ids.append(f"spot-fn-{method.lower()}")
@@ -299,10 +312,6 @@ class DaxEmitter:
                 result.dax = f"/* OVER ({method}) */ {inner}"
                 result.confidence = min(result.confidence, 0.4)
                 result.annotations.append(f"OVER navigation method {method} has no mapping; manual rewrite")
-            if isinstance(nav, FuncCall) and nav.name.lower() == "intersect":
-                result.confidence = min(result.confidence, 0.60)
-                result.rule_ids.append("spot-over-intersect-custom")
-                result.annotations.append("OVER Intersect with hierarchies: mandatory review")
         else:
             # plain OVER ([Column]) == group-by that column
             axis = result.merge(self._emit(nav))

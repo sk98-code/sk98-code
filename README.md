@@ -13,8 +13,23 @@ dashboards and visuals.
 | Assessment | `bimigrate assess <paths>` | discovery + feature mapping matrix + unsupported-feature recommendations + effort estimates |
 | Conversion | `bimigrate convert <paths>` | PBIP projects, TMDL semantic models, DAX measures, Power Query M, RLS proposals, per-expression decision log |
 | Validation | `bimigrate validate <paths>` | accuracy per tier × complexity band, exception register, metadata round-trip checks |
+| Benchmark | `bimigrate benchmark` | conversion-accuracy regression gate over a golden corpus (48 seed cases + pilot-estate extensions) |
+| Collect | `bimigrate collect tableau\|qliksense` | server-side estate pull: workbooks/apps + schedules, subscriptions, alerts, streams, reload tasks |
 
 Plus repository management: `bimigrate kb init|stats|add-rule` and `bimigrate mappings export`.
+
+Additional engines beyond expression conversion:
+- **IronPython intent classifier** (`convert/ironpython.py`): scripts stay MANUAL
+  by policy, but triage is automated — Document API calls are matched against a
+  mapping table (export, email, navigation, filter/marking, property writes, data
+  refresh, dialogs) and each script gets a Power Automate / bookmarks / Fabric
+  rebuild recommendation with per-line annotations.
+- **REST collectors** (`collect/`): Tableau Server/Cloud (PAT auth; workbooks,
+  schedules, subscriptions, data alerts) and Qlik Sense QRS (header auth; apps,
+  streams, reload tasks). Injectable transports, stdlib-only.
+- **Benchmark harness** (`validate/benchmark.py`): golden-corpus regression gate
+  for the rule set; scores per tier × band, fails CI on tier drift or output
+  changes, and accepts engagement-specific corpus files for pilot estates.
 
 ## Quick start
 
@@ -44,10 +59,10 @@ bimigrate validate ./estate
   applied *before* anything reaches the job store or reports.
 
 **Tier 2 — Translation Engines** (`kb/`, `mapping/`, `convert/`, `emit/`)
-- **Knowledge base** (SQLite + JSON + Markdown export): 457 source-function records,
-  321 DAX/M target-function records (used for emitter output validation),
-  **372 data-driven conversion rules** (growing toward the 500+ target; rules are
-  rows, not code — extend in the field via `bimigrate kb add-rule`).
+- **Knowledge base** (SQLite + JSON + Markdown export): 606 source-function records,
+  335 DAX/M target-function records (used for emitter output validation),
+  **502 data-driven conversion rules** (rules are rows, not code — extend in the
+  field via `bimigrate kb add-rule`).
 - **Feature Mapping Repository**: 104 seeded mappings across all four platforms and
   every layer (workbook/dashboard/visual/calculation/data/security/scheduling),
   each with Power BI equivalent (or explicit `None`), complexity, automation level,
@@ -108,7 +123,7 @@ contradicts their confidence.
 
 ```bash
 pip install -e ".[dev]"
-pytest             # 51 tests: parsers, bulk engine, KB, conversion, emitters, CLI
+pytest             # 61 tests: parsers, bulk engine, KB, conversion, emitters, collectors, benchmark, CLI
 ruff check src tests && black --check src tests
 ```
 
