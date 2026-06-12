@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bimigrate"
+version = "0.1.0"
+description = "Unified BI migration platform: Tableau / Spotfire / QlikView / Qlik Sense -> Power BI / Microsoft Fabric"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+dependencies = [
+    "pydantic>=2.5",
+    "click>=8.1",
+    "lxml>=4.9",
+    "openpyxl>=3.1",
+    "sqlalchemy>=2.0",
+    "datasketch>=1.6",
+    "rich>=13.0",
+    "structlog>=24.0",
+]
+
+[project.optional-dependencies]
+agents = ["anthropic>=0.40"]
+dev = ["pytest>=8.0", "ruff>=0.4", "black>=24.0"]
+
+[project.scripts]
+bimigrate = "bimigrate.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"bimigrate.kb" = ["data/*.json"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.black]
+line-length = 110
+target-version = ["py311"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
