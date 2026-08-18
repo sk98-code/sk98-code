@@ -123,6 +123,10 @@
   <button class="primary" id="run">Analyze</button>
   <button id="expJson" disabled>Export JSON</button>
   <button id="expDb" disabled>Export SQLite</button>
+  <button id="expTmdl" disabled title="TMDL copy with the Unused objects removed">Clean TMDL</button>
+  <button id="expDax" disabled title="Every measure and calc-column expression">DAX backup</button>
+  <button id="expDoc" disabled title="Model + report documentation (Markdown)">Docs</button>
+  <button id="saveSess" disabled title="Save this analysis so it can be reopened">Save analysis</button>
 </header>
 
 <div class="wrap">
@@ -140,9 +144,15 @@
   <div class="panel">
     <nav id="tabs">
       <button data-t="objects" class="on">Objects</button>
+      <button data-t="e2e">Source → Visual</button>
       <button data-t="tree">Dependency tree</button>
+      <button data-t="report">Report</button>
+      <button data-t="dax">DAX</button>
       <button data-t="m">M expressions</button>
+      <button data-t="rels">Relationships</button>
       <button data-t="rules">Best practices</button>
+      <button data-t="dups">Duplicates</button>
+      <button data-t="search">Search all</button>
       <button data-t="removal">Removal preview</button>
     </nav>
 
@@ -167,6 +177,65 @@
       </div>
       <div class="note">Tick objects to build a removal preview. Only objects whose status is
         exactly <b>Unused</b> can be scripted for deletion.</div>
+    </section>
+
+    <section data-p="e2e" hidden>
+      <div class="filters">
+        <input type="text" id="eQ" placeholder="Filter by source, table, column, visual or page…">
+        <select id="eStatus"><option value="">All statuses</option></select>
+        <span class="muted" id="eCount"></span>
+      </div>
+      <div class="scroll">
+        <table><thead><tr>
+          <th>Source</th><th>Table</th><th>Column</th><th>Status</th>
+          <th>Measures</th><th>Visual</th><th>Page</th><th>Report</th>
+        </tr></thead><tbody id="eRows"></tbody></table>
+      </div>
+      <div class="note">One row per end-to-end path. A column with no visual is
+        shown once with an empty right-hand side — that is what an unused column
+        looks like in this view.</div>
+    </section>
+
+    <section data-p="report" hidden>
+      <div class="scroll" id="reportBox"></div>
+    </section>
+
+    <section data-p="dax" hidden>
+      <div class="filters">
+        <input type="text" id="dQ" placeholder="Search measure names and DAX…">
+        <span class="muted" id="dCount"></span>
+      </div>
+      <div class="scroll">
+        <table><thead><tr><th>Name</th><th>Table</th><th>Kind</th><th>Status</th></tr></thead>
+        <tbody id="dRows"></tbody></table>
+      </div>
+      <pre class="code" id="dCode" hidden></pre>
+    </section>
+
+    <section data-p="rels" hidden>
+      <div class="scroll">
+        <table><thead><tr>
+          <th>From</th><th>To</th><th>Cardinality</th><th>Cross-filter</th><th>Active</th>
+        </tr></thead><tbody id="relRows"></tbody></table>
+      </div>
+    </section>
+
+    <section data-p="dups" hidden>
+      <div class="scroll" id="dupBox"></div>
+      <div class="note">Expressions are compared with comments and layout ignored,
+        but string literals kept exact — two measures differing only inside a
+        literal are genuinely different and are not grouped.</div>
+    </section>
+
+    <section data-p="search" hidden>
+      <div class="filters">
+        <input type="text" id="sQ" placeholder="Search everything — objects, DAX, M code…">
+        <span class="muted" id="sCount"></span>
+      </div>
+      <div class="scroll">
+        <table><thead><tr><th>Kind</th><th>Name</th><th>Where</th><th>Status</th></tr></thead>
+        <tbody id="sRows"></tbody></table>
+      </div>
     </section>
 
     <section data-p="tree" hidden>
@@ -234,6 +303,12 @@ $('#tabs').addEventListener('click', e => {
   document.querySelectorAll('section[data-p]').forEach(s=>s.hidden = s.dataset.p !== b.dataset.t);
   if(b.dataset.t==='m' && !mEntries.length) loadM();
   if(b.dataset.t==='rules') loadRules();
+  if(b.dataset.t==='e2e') loadE2E();
+  if(b.dataset.t==='report') loadReport();
+  if(b.dataset.t==='dax') loadDax();
+  if(b.dataset.t==='rels') loadRels();
+  if(b.dataset.t==='search') $('#sQ').focus();
+  if(b.dataset.t==='dups') loadDups();
 });
 
 /* ------------------------------------------------------------- analyze -- */
@@ -249,8 +324,9 @@ async function run(){
     const res = await api('/api/analyze', {method:'POST', headers:{'content-type':'application/json'},
       body: JSON.stringify({path})});
     renderLog(res.log);
-    if(res.ok){ renderSummary(res.summary); loadObjects(); fillTreePicker(); mEntries=[]; loadRules();
-      $('#expJson').disabled = $('#expDb').disabled = false; }
+    if(res.ok){ renderSummary(res.summary); loadObjects(); fillTreePicker(); mEntries=[];
+      $('#eStatus').innerHTML='<option value="">All statuses</option>'; loadRules();
+      enableActions(); }
     else { $('#summary').innerHTML = '<div class="muted">No model metadata in this file.</div>'; }
   }catch(err){
     $('#log').innerHTML = '';
@@ -456,9 +532,158 @@ $('#planBtn').addEventListener('click', async () => {
   }catch(err){ box.innerHTML=''; box.appendChild(el('div','note', err.message)); }
 });
 
+/* ----------------------------------------------------------- duplicates -- */
+async function loadDups(){
+  const {rows} = await api('/api/duplicates');
+  const box = $('#dupBox'); box.innerHTML='';
+  if(!rows.length){ box.innerHTML='<div class="empty">No duplicate DAX in this model.</div>'; return; }
+  rows.forEach(g => {
+    const head = el('div','pad');
+    head.appendChild(el('b', null, `${g.count} objects share one expression`));
+    head.appendChild(el('span','edge', '  fingerprint ' + g.fingerprint));
+    box.appendChild(head);
+    const t2 = el('table');
+    t2.innerHTML = '<thead><tr><th>Kind</th><th>Table</th><th>Name</th></tr></thead>';
+    const tb = el('tbody');
+    g.objects.forEach(o => { const tr=el('tr');
+      tr.appendChild(el('td','kind', o.kind));
+      tr.appendChild(el('td','muted', o.table));
+      tr.appendChild(el('td', null, o.name)); tb.appendChild(tr); });
+    t2.appendChild(tb); box.appendChild(t2);
+    const pre = el('pre','code', g.expression); box.appendChild(pre);
+  });
+}
+
 /* --------------------------------------------------------------- export -- */
 $('#expJson').addEventListener('click', ()=> location.href='/api/export?fmt=json');
 $('#expDb').addEventListener('click', ()=> location.href='/api/export?fmt=sqlite');
+$('#expTmdl').addEventListener('click', ()=> location.href='/api/clean-tmdl');
+$('#expDax').addEventListener('click', ()=> location.href='/api/dax-backup');
+$('#expDoc').addEventListener('click', ()=> location.href='/api/documentation');
+$('#saveSess').addEventListener('click', ()=> location.href='/api/session/save');
+
+/* --------------------------------------------------- source -> visual -- */
+['#eQ'].forEach(s => $(s).addEventListener('input', debounce(loadE2E, 250)));
+$('#eStatus').addEventListener('change', loadE2E);
+
+async function loadE2E(){
+  const p = new URLSearchParams({q:$('#eQ').value, status:$('#eStatus').value});
+  const {rows,total} = await api('/api/lineage/end-to-end?'+p);
+  $('#eCount').textContent = total + ' path' + (total===1?'':'s');
+  const tb = $('#eRows'); tb.innerHTML='';
+  if(!rows.length){ tb.innerHTML='<tr><td colspan="8" class="empty">No paths match.</td></tr>'; return; }
+  rows.forEach(r => {
+    const tr = el('tr');
+    tr.appendChild(el('td', r.source?'':'muted', r.source || '— not resolved —'));
+    tr.appendChild(el('td','muted', r.table));
+    tr.appendChild(el('td', null, r.column));
+    const tdS = el('td'); tdS.appendChild(el('span','pill '+statusClass(r.status), r.status)); tr.appendChild(tdS);
+    tr.appendChild(el('td','muted', (r.measures||[]).join(', ')));
+    tr.appendChild(el('td', null, r.visual_type || ''));
+    tr.appendChild(el('td','muted', r.page || ''));
+    tr.appendChild(el('td','muted', r.report || ''));
+    tr.addEventListener('click', ()=> showTree(`column:${r.table}[${r.column}]`, `${r.table}[${r.column}]`));
+    tb.appendChild(tr);
+  });
+  // keep the status filter in sync with what is present
+  const sel = $('#eStatus');
+  if(sel.options.length <= 1){
+    [...new Set(rows.map(r=>r.status))].forEach(s => { const o=el('option',null,s); o.value=s; sel.appendChild(o); });
+  }
+}
+
+/* --------------------------------------------------------- report tab -- */
+async function loadReport(){
+  const {rows} = await api('/api/report-structure');
+  const box = $('#reportBox'); box.innerHTML='';
+  if(!rows.length){ box.innerHTML='<div class="empty">No report layer in this file.</div>'; return; }
+  rows.forEach(p => {
+    const head = el('div','pad');
+    const title = el('b', null, `${p.page}`);
+    head.appendChild(title);
+    head.appendChild(el('span','edge', `  ${p.visual_count} visual${p.visual_count===1?'':'s'}${p.hidden?' · hidden page':''} · ${p.report}`));
+    box.appendChild(head);
+    const t = el('table');
+    t.innerHTML = '<thead><tr><th>Visual</th><th>Type</th><th>Fields</th></tr></thead>';
+    const tb = el('tbody');
+    p.visuals.forEach(v => {
+      const tr = el('tr');
+      tr.appendChild(el('td','muted', v.name ? v.name.slice(0,16) : ''));
+      tr.appendChild(el('td', null, (v.type||'') + (v.hidden?' · hidden':'')));
+      tr.appendChild(el('td','why', v.fields.join(', ') || '— no model fields —'));
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb); box.appendChild(t);
+  });
+}
+
+/* ------------------------------------------------------------ DAX tab -- */
+$('#dQ').addEventListener('input', debounce(loadDax, 250));
+async function loadDax(){
+  const {rows} = await api('/api/dax?q='+encodeURIComponent($('#dQ').value));
+  $('#dCount').textContent = rows.length + ' expression' + (rows.length===1?'':'s');
+  const tb = $('#dRows'); tb.innerHTML=''; $('#dCode').hidden = true;
+  if(!rows.length){ tb.innerHTML='<tr><td colspan="4" class="empty">No DAX in this model.</td></tr>'; return; }
+  rows.forEach(r => {
+    const tr = el('tr');
+    tr.appendChild(el('td', null, r.name));
+    tr.appendChild(el('td','muted', r.table));
+    tr.appendChild(el('td','kind', r.kind));
+    const tdS = el('td');
+    if(r.status) tdS.appendChild(el('span','pill '+statusClass(r.status), r.status));
+    tr.appendChild(tdS);
+    tr.addEventListener('click', ()=>{
+      document.querySelectorAll('#dRows tr').forEach(x=>x.classList.remove('sel'));
+      tr.classList.add('sel');
+      $('#dCode').textContent = r.expression; $('#dCode').hidden=false;
+    });
+    tb.appendChild(tr);
+  });
+}
+
+/* -------------------------------------------------- relationships tab -- */
+async function loadRels(){
+  const {rows} = await api('/api/relationships');
+  const tb = $('#relRows'); tb.innerHTML='';
+  if(!rows.length){ tb.innerHTML='<tr><td colspan="5" class="empty">No relationships in this model.</td></tr>'; return; }
+  rows.forEach(r => {
+    const tr = el('tr');
+    tr.appendChild(el('td', null, r.from));
+    tr.appendChild(el('td', null, r.to));
+    tr.appendChild(el('td','muted', r.cardinality));
+    tr.appendChild(el('td','muted', r.cross_filtering));
+    tr.appendChild(el('td', r.active?'':'muted', r.active ? 'yes' : 'inactive'));
+    tb.appendChild(tr);
+  });
+}
+
+/* ------------------------------------------------------- search all -- */
+$('#sQ').addEventListener('input', debounce(loadSearch, 300));
+async function loadSearch(){
+  const q = $('#sQ').value.trim();
+  const tb = $('#sRows');
+  if(!q){ tb.innerHTML='<tr><td colspan="4" class="empty">Type to search.</td></tr>'; $('#sCount').textContent=''; return; }
+  const {rows,total} = await api('/api/search?q='+encodeURIComponent(q));
+  $('#sCount').textContent = (total||rows.length) + ' hit' + ((total||rows.length)===1?'':'s');
+  tb.innerHTML='';
+  if(!rows.length){ tb.innerHTML='<tr><td colspan="4" class="empty">Nothing found.</td></tr>'; return; }
+  rows.forEach(r => {
+    const tr = el('tr');
+    tr.appendChild(el('td','kind', r.kind));
+    tr.appendChild(el('td', null, r.name));
+    tr.appendChild(el('td','why', r.context));
+    const tdS = el('td');
+    if(r.status) tdS.appendChild(el('span','pill '+statusClass(r.status), r.status));
+    tr.appendChild(tdS);
+    if(r.id) tr.addEventListener('click', ()=> showTree(r.id, r.name));
+    tb.appendChild(tr);
+  });
+}
+
+function enableActions(){
+  ['#expJson','#expDb','#expTmdl','#expDax','#expDoc','#saveSess']
+    .forEach(s => $(s).disabled = false);
+}
 
 function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
 
@@ -466,8 +691,7 @@ function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout
 api('/api/state').then(s => {
   if(s.source) $('#path').value = s.source;
   if(s.log && s.log.length) renderLog(s.log);
-  if(s.loaded){ renderSummary(s.summary); loadObjects(); fillTreePicker();
-    $('#expJson').disabled = $('#expDb').disabled = false; }
+  if(s.loaded){ renderSummary(s.summary); loadObjects(); fillTreePicker(); enableActions(); }
 }).catch(()=>{});
 </script>
 </body>

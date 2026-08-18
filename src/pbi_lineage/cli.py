@@ -190,6 +190,145 @@ def removal_plan(path: str, objects: tuple[str, ...], out: str | None) -> None:
         click.echo(f"\nimpact manifest: {out}")
 
 
+@main.command("clean-tmdl")
+@click.argument("path", type=click.Path(exists=True))
+@click.option("--out", type=click.Path(), required=True, help="Folder to write the TMDL into")
+@click.option("--keep-unused", is_flag=True, help="Export everything instead of dropping Unused")
+def clean_tmdl_cmd(path: str, out: str, keep_unused: bool) -> None:
+    """Write a TMDL copy of the model with unused objects removed."""
+    from pbi_lineage import cleanup
+
+    output = analyze_local_file(path)
+    if not output.bundles:
+        raise click.ClickException("could not analyze the model")
+    bundle = output.bundles[0]
+    files = cleanup.clean_tmdl(bundle.model, bundle.analysis, drop_unused=not keep_unused)
+    cleanup.write_clean_tmdl(out, files)
+    dropped = 0 if keep_unused else len(bundle.analysis.by_status(STATUS_UNUSED))
+    click.echo(f"wrote {len(files)} TMDL file(s) to {out} ({dropped} unused object(s) dropped)")
+
+
+@main.command("backup-dax")
+@click.argument("path", type=click.Path(exists=True))
+@click.option("--out", type=click.Path(), required=True)
+def backup_dax_cmd(path: str, out: str) -> None:
+    """Back up every measure and calculated-column expression to JSON."""
+    from pbi_lineage import cleanup
+    from pbi_lineage.readers import read_any
+
+    model = read_any(path).model
+    if model is None:
+        raise click.ClickException("no model metadata in this file")
+    backup = cleanup.backup_dax(model)
+    Path(out).write_text(json.dumps(backup.as_dict(), indent=2), encoding="utf-8")
+    click.echo(
+        f"backed up {len(backup.measures)} measure(s) and "
+        f"{len(backup.calculated_columns)} calculated column(s) to {out}"
+    )
+
+
+@main.command("restore-dax")
+@click.argument("path", type=click.Path(exists=True))
+@click.option("--backup", "backup_file", type=click.Path(exists=True), required=True)
+def restore_dax_cmd(path: str, backup_file: str) -> None:
+    """Show what restoring a DAX backup would change (dry run)."""
+    from pbi_lineage import cleanup
+    from pbi_lineage.readers import read_any
+
+    model = read_any(path).model
+    if model is None:
+        raise click.ClickException("no model metadata in this file")
+    changes = cleanup.restore_dax(model, json.loads(Path(backup_file).read_text(encoding="utf-8")))
+    if not changes:
+        click.echo("nothing to restore — the model already matches the backup")
+        return
+    for change in changes:
+        click.echo(f"  {change}")
+    click.secho(
+        "\nThis was a dry run against the in-memory model. Apply the expressions "
+        "through Power BI Desktop or the XMLA write endpoint.",
+        fg="yellow",
+    )
+
+
+@main.command()
+@click.argument("path", type=click.Path(exists=True))
+@click.option("--out", type=click.Path(), default=None, help="Write Markdown here instead of stdout")
+def docs(path: str, out: str | None) -> None:
+    """Generate model + report documentation as Markdown."""
+    from pbi_lineage import cleanup
+
+    output = analyze_local_file(path)
+    if not output.bundles:
+        raise click.ClickException("could not analyze the model")
+    bundle = output.bundles[0]
+    text = cleanup.documentation_markdown(bundle.model, bundle.analysis, bundle.reports)
+    if out:
+        Path(out).write_text(text, encoding="utf-8")
+        click.echo(f"documentation written to {out}")
+    else:
+        click.echo(text)
+
+
+@main.command()
+@click.argument("path", type=click.Path(exists=True))
+def duplicates(path: str) -> None:
+    """Find measures whose DAX is identical apart from formatting."""
+    from pbi_lineage import cleanup
+    from pbi_lineage.readers import read_any
+
+    model = read_any(path).model
+    if model is None:
+        raise click.ClickException("no model metadata in this file")
+    groups = cleanup.duplicate_dax(model)
+    if not groups:
+        click.echo("no duplicate DAX found")
+        return
+    for group in groups:
+        names = ", ".join(f"{o['table']}[{o['name']}]" for o in group["objects"])
+        click.echo(f"{group['count']}x  {names}")
+        click.echo(f"     {group['expression'][:120]}")
+
+
+@main.command("tenant-report")
+@click.argument("scan_result", type=click.Path(exists=True))
+@click.option("--activity", type=click.Path(exists=True), default=None, help="Activity events JSON")
+@click.option("--out", type=click.Path(), required=True)
+def tenant_report(scan_result: str, activity: str | None, out: str) -> None:
+    """Governance report from a saved Scanner payload (+ activity log)."""
+    from pbi_lineage import governance
+
+    scan = json.loads(Path(scan_result).read_text(encoding="utf-8"))
+    events = json.loads(Path(activity).read_text(encoding="utf-8")) if activity else []
+    if isinstance(events, dict):
+        events = events.get("activityEventEntities", [])
+
+    report = {
+        "summary": governance.tenant_summary(scan).as_dict(),
+        "access": governance.access_matrix(scan),
+        "security": governance.security_rules(scan),
+        "models": governance.model_inventory(scan),
+        "dataflows": governance.dataflow_inventory(scan),
+        "notebooks": governance.notebook_inventory(scan),
+        "apps": governance.apps_and_audiences(scan),
+        "custom_visuals": governance.custom_visual_usage(scan),
+        "report_usage": governance.report_usage(scan, events),
+        "page_usage": governance.page_usage(events),
+        "excel_users": governance.excel_users(events),
+    }
+    Path(out).write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+    summary = report["summary"]
+    click.echo(f"{summary['workspaces']} workspace(s), {summary['users']} distinct principal(s)")
+    for key, count in sorted(summary["items"].items()):
+        click.echo(f"  {key}: {count}")
+    never = [r for r in report["report_usage"] if r["never_viewed"]]
+    if never:
+        click.echo(f"  reports never viewed: {len(never)}")
+    if report["excel_users"]:
+        click.echo(f"  Analyze-in-Excel consumers: {len(report['excel_users'])}")
+    click.echo(f"\nfull report: {out}")
+
+
 @main.command("search-m")
 @click.argument("path", type=click.Path(exists=True))
 @click.argument("needle")

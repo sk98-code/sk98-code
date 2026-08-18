@@ -7,8 +7,10 @@ model for a single-user desktop tool launched with `pbi-lineage ui`.
 
 from __future__ import annotations
 
+import json
 import time
 import traceback
+import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -17,7 +19,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
-from pbi_lineage.graph import nid_column
+from pbi_lineage.graph import nid_column, nid_measure
+from pbi_lineage import cleanup
+from pbi_lineage.lineage import attach_sources, end_to_end_rows
 from pbi_lineage.mindex import MExpressionIndex
 from pbi_lineage.persist import ScanBundle, write_json, write_sqlite
 from pbi_lineage.readers import detect_format, read_any
@@ -274,13 +278,237 @@ def create_app() -> FastAPI:
             "summary": plan.summary(),
         }
 
+    # ------------------------------------------------ source→visual lineage --
+
+    @app.get("/api/lineage/end-to-end")
+    def lineage_end_to_end(table: str = "", column: str = "", status: str = "", q: str = "") -> dict:
+        """The full chain: source → table → column → measures → visual →
+        page → report, flattened one row per consuming visual."""
+        bundle = _require(session)
+        rows = [
+            row.as_dict()
+            for row in end_to_end_rows(
+                bundle.model, bundle.analysis, session.m_index, table=table, column=column
+            )
+        ]
+        if status:
+            rows = [r for r in rows if r["status"] == status]
+        if q:
+            needle = q.lower()
+            rows = [
+                r
+                for r in rows
+                if any(
+                    needle in str(value).lower()
+                    for value in (r["source"], r["table"], r["column"], r["visual_type"], r["page"])
+                    if value
+                )
+            ]
+        return {"rows": rows, "total": len(rows)}
+
+    @app.get("/api/sources")
+    def sources() -> dict:
+        """Every upstream object the model loads from, with its tables."""
+        bundle = _require(session)
+        by_table = attach_sources(bundle.analysis.graph, bundle.model, session.m_index)
+        grouped: dict[str, dict] = {}
+        for table_name, refs in by_table.items():
+            for ref in refs:
+                entry = grouped.setdefault(
+                    ref.display(),
+                    {"source": ref.display(), "system": ref.system, "object": ref.label, "tables": []},
+                )
+                entry["tables"].append(table_name)
+        return {"rows": sorted(grouped.values(), key=lambda r: r["source"])}
+
+    # ------------------------------------------------------ relationships --
+
+    @app.get("/api/relationships")
+    def relationships() -> dict:
+        bundle = _require(session)
+        rows = []
+        for rel in bundle.model.relationships:
+            rows.append(
+                {
+                    "name": rel.name,
+                    "from": f"{rel.from_table}[{rel.from_column}]",
+                    "to": f"{rel.to_table}[{rel.to_column}]",
+                    "active": rel.is_active,
+                    "cardinality": rel.to_cardinality or "manyToOne",
+                    "cross_filtering": rel.cross_filtering or "singleDirection",
+                }
+            )
+        return {"rows": rows}
+
+    # -------------------------------------------------------- DAX browser --
+
+    @app.get("/api/dax")
+    def dax_expressions(q: str = "") -> dict:
+        bundle = _require(session)
+        needle = q.lower().strip()
+        rows = []
+        for table in bundle.model.tables:
+            for measure in table.measures:
+                rows.append(
+                    {
+                        "kind": "measure",
+                        "table": table.name,
+                        "name": measure.name,
+                        "expression": measure.expression,
+                        "format": measure.format_string,
+                        "folder": measure.display_folder,
+                        "status": _status_of(bundle, nid_measure(measure.name)),
+                    }
+                )
+            for col in table.columns:
+                if col.expression:
+                    rows.append(
+                        {
+                            "kind": "calculated column",
+                            "table": table.name,
+                            "name": col.name,
+                            "expression": col.expression,
+                            "format": col.format_string,
+                            "folder": None,
+                            "status": _status_of(bundle, nid_column(table.name, col.name)),
+                        }
+                    )
+        if needle:
+            rows = [
+                r for r in rows if needle in r["name"].lower() or needle in (r["expression"] or "").lower()
+            ]
+        return {"rows": sorted(rows, key=lambda r: (r["kind"], r["table"], r["name"]))}
+
+    # ---------------------------------------------------- report structure --
+
+    @app.get("/api/report-structure")
+    def report_structure() -> dict:
+        """Pages → visuals → the fields each visual consumes."""
+        bundle = _require(session)
+        pages = []
+        for report in bundle.reports:
+            for page in report.pages:
+                visuals = []
+                for visual in page.visuals:
+                    fields = sorted({f"{table or '?'}[{name}]" for table, name, _kind in visual.fields()})
+                    visuals.append(
+                        {
+                            "name": visual.name,
+                            "type": visual.visual_type,
+                            "hidden": visual.is_hidden,
+                            "field_count": len(fields),
+                            "fields": fields,
+                        }
+                    )
+                pages.append(
+                    {
+                        "report": report.name,
+                        "page": page.display_name or page.name,
+                        "hidden": page.is_hidden,
+                        "visual_count": len(page.visuals),
+                        "visuals": visuals,
+                    }
+                )
+        return {"rows": pages}
+
+    # ---------------------------------------------------------- search all --
+
+    @app.get("/api/search")
+    def search_all(q: str) -> dict:
+        """One box over every object type — the 'where is this used?' entry."""
+        bundle = _require(session)
+        needle = q.lower().strip()
+        if not needle:
+            return {"rows": []}
+        rows = []
+        for verdict in bundle.analysis.verdicts.values():
+            if needle in verdict.name.lower() or needle in (verdict.table or "").lower():
+                rows.append(
+                    {
+                        "kind": verdict.kind,
+                        "name": verdict.name,
+                        "context": verdict.table or "",
+                        "status": verdict.status,
+                        "id": verdict.object_id,
+                    }
+                )
+        for table in bundle.model.tables:
+            for measure in table.measures:
+                if needle in (measure.expression or "").lower():
+                    rows.append(
+                        {
+                            "kind": "dax",
+                            "name": measure.name,
+                            "context": f"{table.name} — expression match",
+                            "status": _status_of(bundle, nid_measure(measure.name)),
+                            "id": nid_measure(measure.name),
+                        }
+                    )
+        for hit in session.m_index.search(q):
+            rows.append(
+                {
+                    "kind": "m code",
+                    "name": hit.entry.entry_name,
+                    "context": f"line {hit.line_number}: {hit.line[:80]}"
+                    + (" (comment)" if hit.in_comment else ""),
+                    "status": "",
+                    "id": "",
+                }
+            )
+        return {"rows": rows[:400], "total": len(rows)}
+
+    # -------------------------------------------------- cleanup & actions --
+
+    @app.get("/api/duplicates")
+    def duplicates() -> dict:
+        """Measures whose DAX is identical once comments and layout are
+        ignored — the 'same logic under five names' problem."""
+        bundle = _require(session)
+        return {"rows": cleanup.duplicate_dax(bundle.model)}
+
+    @app.get("/api/clean-tmdl")
+    def clean_tmdl_download(drop_unused: bool = True) -> FileResponse:
+        """A TMDL copy of the model with the Unused objects already gone."""
+        bundle = _require(session)
+        files = cleanup.clean_tmdl(bundle.model, bundle.analysis, drop_unused=drop_unused)
+        out_dir = _out_dir(session) / "clean_tmdl"
+        cleanup.write_clean_tmdl(out_dir, files)
+        archive = _out_dir(session) / f"{bundle.model.name}.clean-tmdl.zip"
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
+            for relative, text in files.items():
+                zf.writestr(relative, text)
+        return FileResponse(archive, filename=archive.name, media_type="application/zip")
+
+    @app.get("/api/dax-backup")
+    def dax_backup() -> FileResponse:
+        bundle = _require(session)
+        path = _out_dir(session) / f"{bundle.model.name}.dax-backup.json"
+        path.write_text(json.dumps(cleanup.backup_dax(bundle.model).as_dict(), indent=2), encoding="utf-8")
+        return FileResponse(path, filename=path.name, media_type="application/json")
+
+    @app.get("/api/documentation")
+    def documentation() -> FileResponse:
+        bundle = _require(session)
+        path = _out_dir(session) / f"{bundle.model.name}.documentation.md"
+        path.write_text(
+            cleanup.documentation_markdown(bundle.model, bundle.analysis, bundle.reports),
+            encoding="utf-8",
+        )
+        return FileResponse(path, filename=path.name, media_type="text/markdown")
+
+    @app.get("/api/session/save")
+    def session_save() -> FileResponse:
+        bundle = _require(session)
+        path = _out_dir(session) / f"{bundle.model.name}{cleanup.SESSION_SUFFIX}"
+        cleanup.save_session(path, bundle, source_path=session.source_path, log=session.log)
+        return FileResponse(path, filename=path.name, media_type="application/json")
+
     # ------------------------------------------------------------ export --
 
     @app.get("/api/export")
     def export(fmt: str = "json") -> FileResponse:
         bundle = _require(session)
-        out_dir = Path(session.source_path or ".").parent / "pbi_lineage_results"
-        out_dir.mkdir(parents=True, exist_ok=True)
+        out_dir = _out_dir(session)
         if fmt == "sqlite":
             path = write_sqlite(out_dir / "pbi_lineage.sqlite", [bundle])
             media = "application/x-sqlite3"
@@ -293,6 +521,17 @@ def create_app() -> FastAPI:
 
 
 # --------------------------------------------------------------- helpers --
+
+
+def _out_dir(session: Session) -> Path:
+    out = Path(session.source_path or ".").parent / "pbi_lineage_results"
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+
+def _status_of(bundle: ScanBundle, node_id: str) -> str:
+    verdict = bundle.analysis.verdicts.get(node_id) if bundle.analysis else None
+    return verdict.status if verdict else ""
 
 
 def _require(session: Session) -> ScanBundle:
