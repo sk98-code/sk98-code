@@ -146,3 +146,29 @@ ruff check src tests && black --check src tests
 ```
 
 Layout: `src/bimigrate/{models,parsers,engine,kb,mapping,convert,emit,validate,agents,report}` — see module docstrings for per-subsystem design notes.
+
+## pbi_lineage (Power BI metadata & lineage analyzer)
+
+`src/pbi_lineage` is a separate package: a Power BI model/report dependency
+and lineage analyzer (Measure Killer-class tool), built in the milestone
+order of `docs/pbi_lineage_build_spec.md`. Milestone 1 (file readers) is
+done:
+
+```python
+from pbi_lineage import read_pbix, read_pbip, read_any
+
+result = read_any("Sales.pbix")          # or a .pbip file / project folder
+result.report      # ReportLayout: pages -> visuals -> FieldReference (with evidence)
+result.model       # Model: tables, columns, measures, hierarchies, relationships, roles
+result.is_thin     # thin report (live-connected to a shared semantic model)?
+result.connection  # remote dataset id / connection string when thin
+```
+
+Covered so far: legacy `Report/Layout` (UTF-16 LE, JSON-in-JSON) and PBIR
+parsing, TMDL + `model.bim` semantic-model inventory, report-level measures
+(`modelExtensions` / `reportExtensions.json`), thin-report detection
+(missing `DataModel` + `Connections`, or `definition.pbir` `byConnection`),
+DataMashup `Section1.m` extraction, and a deep-scan reference extractor with
+per-reference evidence paths (visual filters, conditional formatting,
+dynamic titles, sort-by, bookmarks, sync slicers, custom-visual blobs).
+Tests: `pytest tests/test_pbil_*.py`.
