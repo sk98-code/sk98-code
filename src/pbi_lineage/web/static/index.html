@@ -144,6 +144,7 @@
   <div class="panel">
     <nav id="tabs">
       <button data-t="objects" class="on">Objects</button>
+      <button data-t="items">Lineage</button>
       <button data-t="e2e">Source → Visual</button>
       <button data-t="tree">Dependency tree</button>
       <button data-t="report">Report</button>
@@ -177,6 +178,20 @@
       </div>
       <div class="note">Tick objects to build a removal preview. Only objects whose status is
         exactly <b>Unused</b> can be scripted for deletion.</div>
+    </section>
+
+    <section data-p="items" hidden>
+      <div class="filters">
+        <select id="itemView">
+          <option value="sources">Data sources — what flows downstream</option>
+          <option value="models">Models — upstream and downstream at once</option>
+        </select>
+        <span class="muted" id="itemCount"></span>
+      </div>
+      <div class="scroll" id="itemBox"></div>
+      <div class="note">Item-level view: whole sources, models and reports rather
+        than columns. Use it for "what breaks if we retire this database?", then
+        narrow with M expressions (table grain) and Source → Visual (column grain).</div>
     </section>
 
     <section data-p="e2e" hidden>
@@ -309,6 +324,7 @@ $('#tabs').addEventListener('click', e => {
   if(b.dataset.t==='rels') loadRels();
   if(b.dataset.t==='search') $('#sQ').focus();
   if(b.dataset.t==='dups') loadDups();
+  if(b.dataset.t==='items') loadItems();
 });
 
 /* ------------------------------------------------------------- analyze -- */
@@ -531,6 +547,77 @@ $('#planBtn').addEventListener('click', async () => {
     }
   }catch(err){ box.innerHTML=''; box.appendChild(el('div','note', err.message)); }
 });
+
+/* ------------------------------------------------------ item lineage -- */
+$('#itemView').addEventListener('change', loadItems);
+
+async function loadItems(){
+  const view = $('#itemView').value;
+  const {rows} = await api('/api/lineage/items?view='+view);
+  const box = $('#itemBox'); box.innerHTML='';
+  $('#itemCount').textContent = rows.length + (view==='sources' ? ' source' : ' item') + (rows.length===1?'':'s');
+  if(!rows.length){ box.innerHTML='<div class="empty">No item-level lineage — the model has no resolvable source.</div>'; return; }
+
+  if(view==='sources'){
+    rows.forEach(r => {
+      const head = el('div','pad');
+      head.appendChild(el('b', null, r.source));
+      head.appendChild(el('span','edge', `  ${r.type} · ${r.system} · ${r.model_count} model(s) · ${r.report_count} report(s)`));
+      box.appendChild(head);
+      const ul = el('ul'); ul.className='';
+      const tree = el('div','tree');
+      const outer = el('ul');
+      r.models.forEach(m => {
+        const li = el('li');
+        li.appendChild(el('b', null, m.model + (m.workspace ? ` — ${m.workspace}` : '')));
+        if(m.tables && m.tables.length) li.appendChild(el('span','edge', '  tables: ' + m.tables.join(', ')));
+        const inner = el('ul');
+        m.consumers.forEach(c => {
+          const cli = el('li');
+          cli.appendChild(el('span', null, c.name));
+          cli.appendChild(el('span','edge', `  ${c.kind}${c.workspace? ' · '+c.workspace : ''}`));
+          inner.appendChild(cli);
+        });
+        if(m.consumers.length) li.appendChild(inner);
+        outer.appendChild(li);
+      });
+      tree.appendChild(outer); box.appendChild(tree);
+    });
+    return;
+  }
+
+  rows.forEach(r => {
+    const head = el('div','pad');
+    head.appendChild(el('b', null, r.model + (r.workspace ? ` — ${r.workspace}` : '')));
+    head.appendChild(el('span','edge', '  ' + r.kind));
+    box.appendChild(head);
+    const tree = el('div','tree'); const outer = el('ul');
+
+    const up = el('li'); up.appendChild(el('b', null, 'Upstream'));
+    const upUl = el('ul');
+    (r.upstream||[]).forEach(u => { const li=el('li');
+      li.appendChild(el('span',null,u.source)); li.appendChild(el('span','edge','  '+(u.system||''))); upUl.appendChild(li); });
+    if(!(r.upstream||[]).length) upUl.appendChild(el('li','muted','— none resolved —'));
+    up.appendChild(upUl); outer.appendChild(up);
+
+    const down = el('li'); down.appendChild(el('b', null, 'Downstream'));
+    const dnUl = el('ul');
+    (r.downstream||[]).forEach(d => { const li=el('li');
+      li.appendChild(el('span',null,d.name));
+      li.appendChild(el('span','edge', `  ${d.kind}${d.workspace? ' · '+d.workspace : ''}`)); dnUl.appendChild(li); });
+    if(!(r.downstream||[]).length) dnUl.appendChild(el('li','muted','— nothing consumes this —'));
+    down.appendChild(dnUl); outer.appendChild(down);
+
+    if((r.cross_workspace||[]).length){
+      const x = el('li'); x.appendChild(el('b', null, 'Cross-workspace dependencies'));
+      const xUl = el('ul');
+      r.cross_workspace.forEach(c => { const li=el('li');
+        li.appendChild(el('span',null,c.name)); li.appendChild(el('span','edge','  '+c.workspace)); xUl.appendChild(li); });
+      x.appendChild(xUl); outer.appendChild(x);
+    }
+    tree.appendChild(outer); box.appendChild(tree);
+  });
+}
 
 /* ----------------------------------------------------------- duplicates -- */
 async function loadDups(){

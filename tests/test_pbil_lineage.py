@@ -157,3 +157,80 @@ def test_filters_narrow_the_walk():
     assert {r.table for r in only_prices} == {"Prices"}
     one_column = end_to_end_rows(model, analysis, index, table="Sales", column="Qty")
     assert {r.column for r in one_column} == {"Qty"}
+
+
+# ---------------------------------------------------------------------------
+# Item-level lineage (the coarse "what depends on this database?" view)
+# ---------------------------------------------------------------------------
+
+
+def test_data_sources_view_walks_downstream():
+    from pbi_lineage.lineage import local_item_lineage
+
+    model = _model()
+    graph = local_item_lineage(model, _index(model), [_report()])
+    sources = {row["source"]: row for row in graph["data_sources"]}
+    sql = next(row for name, row in sources.items() if name.startswith("dbo.FactSales"))
+    assert sql["type"] == "database"
+    assert sql["model_count"] == 1
+    assert sql["models"][0]["model"] == "M"
+    assert "Sales" in sql["models"][0]["tables"]
+    assert sql["models"][0]["consumers"][0]["name"] == "Rep"
+
+    excel = next(row for name, row in sources.items() if name.startswith("prices.xlsx"))
+    assert excel["type"] == "file"
+
+
+def test_models_view_shows_both_directions():
+    from pbi_lineage.lineage import local_item_lineage
+
+    model = _model()
+    graph = local_item_lineage(model, _index(model), [_report()])
+    entry = graph["models"][0]
+    assert entry["model"] == "M"
+    assert {u["source"].split(" (")[0] for u in entry["upstream"]} == {"dbo.FactSales", "prices.xlsx"}
+    assert [d["name"] for d in entry["downstream"]] == ["Rep"]
+
+
+def test_tenant_item_lineage_flags_cross_workspace():
+    from pbi_lineage.lineage import tenant_item_lineage
+
+    scan = {
+        "datasourceInstances": [
+            {
+                "datasourceId": "src1",
+                "datasourceType": "Sql",
+                "connectionDetails": {"server": "dwh", "database": "SalesDW"},
+            }
+        ],
+        "workspaces": [
+            {
+                "id": "ws1",
+                "name": "Finance",
+                "datasets": [
+                    {
+                        "id": "ds1",
+                        "name": "Sales Model",
+                        "datasourceUsages": [{"datasourceInstanceId": "src1"}],
+                    }
+                ],
+                "reports": [{"id": "r1", "name": "Local", "datasetId": "ds1"}],
+            },
+            {
+                "id": "ws2",
+                "name": "Marketing",
+                "reports": [{"id": "r2", "name": "Remote", "datasetId": "ds1"}],
+            },
+        ],
+    }
+    graph = tenant_item_lineage(scan)
+    source = graph["data_sources"][0]
+    assert source["source"] == "dwh.SalesDW"
+    assert source["model_count"] == 1
+    assert source["report_count"] == 2
+
+    model = next(m for m in graph["models"] if m["model"] == "Sales Model")
+    assert {d["name"] for d in model["downstream"]} == {"Local", "Remote"}
+    # the Marketing report lives in another workspace — that is the dependency
+    # that breaks workspace reorganisations, so it is called out separately
+    assert [c["name"] for c in model["cross_workspace"]] == ["Remote"]

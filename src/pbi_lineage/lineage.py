@@ -199,3 +199,211 @@ def end_to_end_rows(
                     )
     rows.sort(key=lambda r: (r.table, r.column, r.page or "", r.visual or ""))
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Item-level lineage: sources → models/dataflows → consumers
+# ---------------------------------------------------------------------------
+#
+# The coarse, top-down view that answers "what breaks if we retire this
+# database?" — whole items rather than columns. Two orientations over the
+# same graph, because the two questions people actually ask are opposite
+# ends of it:
+#
+#   data sources view  — start at a server/database/file, walk downstream
+#   models view        — start at a model, show upstream *and* downstream
+#
+# Both builders emit the same shape so one renderer serves both, and both
+# work from a single local file or a whole tenant scan.
+
+
+def _consumer_entry(kind: str, name: str, workspace: str = "", detail: str = "") -> dict:
+    return {"kind": kind, "name": name, "workspace": workspace, "detail": detail}
+
+
+def local_item_lineage(model: Model, index: MExpressionIndex, reports: list) -> dict:
+    """Item lineage for one analyzed file."""
+    source_rows: dict[str, dict] = {}
+    upstream: list[dict] = []
+
+    for table in model.tables:
+        for ref in sources_for_table(index, table.name):
+            entry = source_rows.setdefault(
+                ref.display(),
+                {
+                    "source": ref.display(),
+                    "system": ref.system,
+                    "type": _source_type(ref.system),
+                    "models": [],
+                    "model_count": 0,
+                    "report_count": 0,
+                },
+            )
+            if all(m["model"] != model.name for m in entry["models"]):
+                entry["models"].append(
+                    {
+                        "model": model.name,
+                        "workspace": "",
+                        "tables": [],
+                        "consumers": [
+                            _consumer_entry("report", report.name or "report") for report in reports
+                        ],
+                    }
+                )
+            member = next(m for m in entry["models"] if m["model"] == model.name)
+            if table.name not in member["tables"]:
+                member["tables"].append(table.name)
+            entry["model_count"] = len(entry["models"])
+            entry["report_count"] = len(reports)
+            if all(u["source"] != ref.display() for u in upstream):
+                upstream.append({"source": ref.display(), "system": ref.system})
+
+    models = [
+        {
+            "model": model.name,
+            "workspace": "",
+            "kind": "semantic model",
+            "upstream": upstream,
+            "downstream": [_consumer_entry("report", report.name or "report") for report in reports],
+            "cross_workspace": [],
+        }
+    ]
+    return {"data_sources": sorted(source_rows.values(), key=lambda r: r["source"]), "models": models}
+
+
+_SOURCE_TYPES = (
+    ("Sql", "database"),
+    ("Oracle", "database"),
+    ("PostgreSQL", "database"),
+    ("MySQL", "database"),
+    ("Snowflake", "database"),
+    ("AmazonRedshift", "database"),
+    ("GoogleBigQuery", "database"),
+    ("Databricks", "lakehouse"),
+    ("Lakehouse", "lakehouse"),
+    ("Fabric", "lakehouse"),
+    ("Odbc", "database"),
+    ("OleDb", "database"),
+    ("Web", "web"),
+    ("SharePoint", "file"),
+    ("AzureStorage", "file"),
+    ("Excel", "file"),
+    ("Csv", "file"),
+    ("File", "file"),
+    ("Folder", "file"),
+    ("PowerPlatform", "dataflow"),
+    ("Dataflows", "dataflow"),
+    ("PowerBI", "semantic model"),
+)
+
+
+def _source_type(system: str | None) -> str:
+    for prefix, label in _SOURCE_TYPES:
+        if (system or "").startswith(prefix):
+            return label
+    return "other"
+
+
+def tenant_item_lineage(scan: dict, consumer_index: dict | None = None) -> dict:
+    """Item lineage across a tenant scan payload.
+
+    Uses the Scanner's own `datasourceInstances` / `upstreamDataflows`
+    lineage where present, and falls back to parsing each model's M for
+    its sources. Cross-workspace dependencies are called out explicitly —
+    they are what quietly breaks workspace reorganizations.
+    """
+    from pbi_lineage.service.thin_reports import build_consumer_index  # noqa: PLC0415 - cycle
+
+    consumer_index = consumer_index if consumer_index is not None else build_consumer_index(scan)
+    workspaces = scan.get("workspaces", []) or []
+    workspace_of: dict[str, str] = {}
+    source_rows: dict[str, dict] = {}
+    models: list[dict] = []
+
+    datasource_by_id = {
+        str(d.get("datasourceId") or d.get("datasourceInstanceId") or ""): d
+        for d in (scan.get("datasourceInstances", []) or [])
+    }
+
+    for workspace in workspaces:
+        workspace_name = workspace.get("name", "")
+        for dataset in workspace.get("datasets", []) or []:
+            workspace_of[str(dataset.get("id", ""))] = workspace_name
+
+    for workspace in workspaces:
+        workspace_name = workspace.get("name", "")
+        for dataset in workspace.get("datasets", []) or []:
+            dataset_id = str(dataset.get("id", ""))
+            upstream: list[dict] = []
+
+            for instance in dataset.get("datasourceUsages", []) or []:
+                raw = datasource_by_id.get(str(instance.get("datasourceInstanceId", "")), {})
+                details = raw.get("connectionDetails", {}) or {}
+                label = ".".join(
+                    str(part)
+                    for part in (details.get("server"), details.get("database"), details.get("path"))
+                    if part
+                ) or raw.get("datasourceType", "unknown source")
+                upstream.append({"source": label, "system": raw.get("datasourceType", "")})
+
+            for flow in dataset.get("upstreamDataflows", []) or []:
+                upstream.append({"source": str(flow.get("targetDataflowId", "")), "system": "Dataflow"})
+
+            consumers = []
+            cross_workspace = []
+            for consumer in consumer_index.get(dataset_id, []):
+                entry = _consumer_entry(consumer.consumer_type.value, consumer.name, consumer.workspace_name)
+                consumers.append(entry)
+                if consumer.workspace_name and consumer.workspace_name != workspace_name:
+                    cross_workspace.append(entry)
+
+            models.append(
+                {
+                    "model": dataset.get("name", ""),
+                    "workspace": workspace_name,
+                    "kind": "semantic model",
+                    "upstream": upstream,
+                    "downstream": consumers,
+                    "cross_workspace": cross_workspace,
+                }
+            )
+
+            for source in upstream:
+                row = source_rows.setdefault(
+                    source["source"],
+                    {
+                        "source": source["source"],
+                        "system": source["system"],
+                        "type": _source_type(source["system"]),
+                        "models": [],
+                        "model_count": 0,
+                        "report_count": 0,
+                    },
+                )
+                row["models"].append(
+                    {
+                        "model": dataset.get("name", ""),
+                        "workspace": workspace_name,
+                        "tables": [],
+                        "consumers": consumers,
+                    }
+                )
+                row["model_count"] = len(row["models"])
+                row["report_count"] = sum(len(m["consumers"]) for m in row["models"])
+
+        for dataflow in workspace.get("dataflows", []) or []:
+            models.append(
+                {
+                    "model": dataflow.get("name", ""),
+                    "workspace": workspace_name,
+                    "kind": "dataflow",
+                    "upstream": [],
+                    "downstream": [],
+                    "cross_workspace": [],
+                }
+            )
+
+    return {
+        "data_sources": sorted(source_rows.values(), key=lambda r: -r["model_count"]),
+        "models": sorted(models, key=lambda m: (m["workspace"], m["model"])),
+    }

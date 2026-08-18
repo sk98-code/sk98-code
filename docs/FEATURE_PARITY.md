@@ -27,12 +27,34 @@ tenant · **No** — not built.
 
 ## Data lineage
 
+The vendor docs describe lineage at three granularities today, with a
+fourth in development. Mapped to this repo:
+
+| Granularity | Their answer | Ours |
+|---|---|---|
+| Server & database — item level | Lineage tab (2 views), Enterprise | **Lineage tab**, both views |
+| Table & view | M Expressions search | **M expressions tab** |
+| Column — model to visual | Where-used detail | **Objects + Dependency tree** |
+| Column — source to visual, end to end | *coming Sep 2026* | **Source → Visual tab**, shipped |
+
+The last row needs a caveat rather than a victory lap: our upstream half
+resolves the *source object* a table loads from (server/database/schema
+object, or the file), so the chain is unbroken source → column → visual —
+but it is **table/view grain upstream**, not column grain. Following a
+specific warehouse *column* through M renames, merges, pivots and custom
+columns needs a full M evaluator, which the build spec scopes out as a
+separate project. That is presumably the harder half they are still
+building.
+
 | Feature | Status | Notes |
 |---|---|---|
+| Item-level lineage — data sources view | **Yes** | Source → models → consumers, with source type and downstream counts |
+| Item-level lineage — models/dataflows view | **Yes** | Upstream and downstream at once, cross-workspace dependencies called out |
 | Column-level lineage — model to visual | **Yes** | Graph + UI tree, both directions |
 | Cross-report lineage | **Yes** | Usage is the union across every parsed report |
 | End-to-end lineage (source → report) | **Yes** | `lineage.py`, "Source → Visual" tab |
-| Column-level lineage — data source to visual | **Yes** | Source resolved from partition M (table/view grain upstream) |
+| Export the lineage graph as JSON | **Yes** | `/api/lineage/items` and the JSON export |
+| Column-level lineage — data source to visual | **Partial** | Chain is unbroken, but upstream resolution is table/view grain — see the note above |
 | Downstream / composite model tracking | **Partial** | Tracked as a consumer; field-level recursion not implemented |
 
 ## Detection & analysis

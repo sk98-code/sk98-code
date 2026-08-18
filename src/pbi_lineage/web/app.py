@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from pbi_lineage.graph import nid_column, nid_measure
 from pbi_lineage import cleanup
-from pbi_lineage.lineage import attach_sources, end_to_end_rows
+from pbi_lineage.lineage import attach_sources, end_to_end_rows, local_item_lineage
 from pbi_lineage.mindex import MExpressionIndex
 from pbi_lineage.persist import ScanBundle, write_json, write_sqlite
 from pbi_lineage.readers import detect_format, read_any
@@ -502,6 +502,15 @@ def create_app() -> FastAPI:
         path = _out_dir(session) / f"{bundle.model.name}{cleanup.SESSION_SUFFIX}"
         cleanup.save_session(path, bundle, source_path=session.source_path, log=session.log)
         return FileResponse(path, filename=path.name, media_type="application/json")
+
+    @app.get("/api/lineage/items")
+    def lineage_items(view: str = "sources") -> dict:
+        """Item-level lineage — the coarse 'what depends on this database?'
+        view. `view=sources` walks downstream from each data source;
+        `view=models` shows each model's upstream and downstream at once."""
+        bundle = _require(session)
+        graph = local_item_lineage(bundle.model, session.m_index, bundle.reports)
+        return {"view": view, "rows": graph["data_sources"] if view == "sources" else graph["models"]}
 
     # ------------------------------------------------------------ export --
 
