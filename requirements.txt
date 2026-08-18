@@ -1,0 +1,12 @@
+# Runtime dependencies for the Vercel deployment of the bimigrate web app.
+# Kept in sync with [project].dependencies + the [web] extra in pyproject.toml.
+fastapi>=0.110
+python-multipart>=0.0.9
+pydantic>=2.5
+click>=8.1
+lxml>=4.9
+openpyxl>=3.1
+sqlalchemy>=2.0
+datasketch>=1.6
+rich>=13.0
+structlog>=24.0
