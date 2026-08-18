@@ -22,6 +22,8 @@ dependencies = [
 
 [project.optional-dependencies]
 agents = ["anthropic>=0.40"]
+# pbi_lineage live Desktop connections (Windows + ADOMD.NET client only)
+pbi-desktop = ["pyadomd>=0.1.1"]
 web = ["fastapi>=0.110", "uvicorn>=0.29", "python-multipart>=0.0.9"]
 dev = ["pytest>=8.0", "ruff>=0.4", "black>=24.0", "httpx>=0.27"]
 

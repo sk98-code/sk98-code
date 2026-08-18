@@ -7,6 +7,9 @@ resolution happens here.
 
 from pbi_lineage.readers import detect_format, read_any, read_pbip, read_pbix
 from pbi_lineage.schema import (
+    CalcDependency,
+    CalculationGroup,
+    CalculationItem,
     Column,
     FieldReference,
     Hierarchy,
@@ -28,6 +31,9 @@ from pbi_lineage.schema import (
 )
 
 __all__ = [
+    "CalcDependency",
+    "CalculationGroup",
+    "CalculationItem",
     "Column",
     "FieldReference",
     "Hierarchy",

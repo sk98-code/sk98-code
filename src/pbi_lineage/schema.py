@@ -64,6 +64,8 @@ class Measure:
     name: str
     expression: str = ""
     format_string: str | None = None
+    # dynamic format string DAX (§5.3: its references are never unused)
+    format_string_expression: str | None = None
     display_folder: str | None = None
     is_hidden: bool = False
     description: str | None = None
@@ -95,6 +97,23 @@ class Partition:
 
 
 @dataclass
+class CalculationItem:
+    """One item of a calculation group. `SELECTEDMEASURE()` inside makes it
+    depend on *every* measure — a wildcard edge, never zero edges (§5.3)."""
+
+    name: str
+    expression: str = ""
+    ordinal: int | None = None
+    format_string_expression: str | None = None
+
+
+@dataclass
+class CalculationGroup:
+    precedence: int | None = None
+    items: list[CalculationItem] = field(default_factory=list)
+
+
+@dataclass
 class Table:
     name: str
     columns: list[Column] = field(default_factory=list)
@@ -103,6 +122,7 @@ class Table:
     partitions: list[Partition] = field(default_factory=list)
     is_hidden: bool = False
     data_category: str | None = None
+    calculation_group: CalculationGroup | None = None
 
     @property
     def is_calculated(self) -> bool:
@@ -149,6 +169,20 @@ class Model:
 
     def table(self, name: str) -> Table | None:
         return next((t for t in self.tables if t.name == name), None)
+
+
+@dataclass(frozen=True)
+class CalcDependency:
+    """One row of DISCOVER_CALC_DEPENDENCY — the engine's own resolution of
+    intra-model dependencies (spec §4.4), the *primary* dependency source."""
+
+    object_type: str
+    table: str | None
+    object: str
+    expression: str | None
+    referenced_object_type: str
+    referenced_table: str | None
+    referenced_object: str
 
 
 # ---------------------------------------------------------------------------

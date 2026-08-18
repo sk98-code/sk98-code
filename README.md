@@ -151,8 +151,8 @@ Layout: `src/bimigrate/{models,parsers,engine,kb,mapping,convert,emit,validate,a
 
 `src/pbi_lineage` is a separate package: a Power BI model/report dependency
 and lineage analyzer (Measure Killer-class tool), built in the milestone
-order of `docs/pbi_lineage_build_spec.md`. Milestone 1 (file readers) is
-done:
+order of `docs/pbi_lineage_build_spec.md`. Milestones 1 (file readers) and
+2 (local AS connector) are done:
 
 ```python
 from pbi_lineage import read_pbix, read_pbip, read_any
@@ -171,4 +171,16 @@ parsing, TMDL + `model.bim` semantic-model inventory, report-level measures
 DataMashup `Section1.m` extraction, and a deep-scan reference extractor with
 per-reference evidence paths (visual filters, conditional formatting,
 dynamic titles, sort-by, bookmarks, sync slicers, custom-visual blobs).
+
+Milestone 2 adds `pbi_lineage.connectors` (mode M2 — live Power BI
+Desktop): `discover_local_instances()` finds the local AS port via
+`msmdsrv.port.txt` (installer and Store layouts, UTF-16),
+`write_pbitool_manifest()` registers the External Tools ribbon entry, and
+`read_model_via_dmv(executor)` / `read_calc_dependencies(executor)` turn
+the full TMSCHEMA_* DMV set (incl. RLS, calculation groups, dynamic format
+strings) and `DISCOVER_CALC_DEPENDENCY` into the same normalized `Model`
+the file readers produce. Any `query(dmv) -> list[dict]` object works as
+the executor; `PyadomdExecutor` is the live one
+(`pip install -e ".[pbi-desktop]"` on Windows).
+
 Tests: `pytest tests/test_pbil_*.py`.
