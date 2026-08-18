@@ -356,22 +356,49 @@ def _summary(session: Session) -> dict:
 
 
 def _tree_json(graph, raw: dict, seen: set | None = None) -> dict:
+    """Shape one walk for the UI, collapsing repeats.
+
+    The same consumer legitimately reaches an object by several paths (a
+    projection *and* a sort *and* a dataTransform). Rendering one row per
+    path buries the structure, so identical children are merged and the
+    extra evidence is kept as a count the UI can show on demand.
+    """
     seen = seen if seen is not None else set()
     node = graph.nodes.get(raw["id"])
     edge = raw.get("edge")
+    label = node.name if node else raw["id"]
+    if node is not None and node.kind == "visual":
+        page = graph.nodes.get(node.parent) if node.parent else None
+        suffix = raw["id"].rsplit("/", 1)[-1]
+        label = f"{label} ({suffix})" if suffix and suffix not in label else label
+        if page is not None:
+            label = f"{label} — {page.name}"
     out = {
         "id": raw["id"],
-        "label": node.name if node else raw["id"],
+        "label": label,
         "kind": node.kind if node else "?",
         "edge_kind": edge.kind if edge else None,
         "confidence": edge.confidence if edge else None,
         "evidence": edge.evidence if edge else None,
+        "extra_evidence": [],
         "children": [],
     }
     if raw["id"] in seen:
         out["cycle"] = True
         return out
     seen = seen | {raw["id"]}
+
+    merged: dict[str, dict] = {}
     for child in raw.get("children", []):
-        out["children"].append(_tree_json(graph, child, seen))
+        rendered = _tree_json(graph, child, seen)
+        existing = merged.get(rendered["id"])
+        if existing is None:
+            merged[rendered["id"]] = rendered
+            continue
+        if rendered["evidence"] and rendered["evidence"] != existing["evidence"]:
+            existing["extra_evidence"].append(rendered["evidence"])
+        for grandchild in rendered["children"]:
+            if all(g["id"] != grandchild["id"] for g in existing["children"]):
+                existing["children"].append(grandchild)
+    out["children"] = list(merged.values())
     return out

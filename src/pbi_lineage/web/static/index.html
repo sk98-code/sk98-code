@@ -171,13 +171,14 @@
 
     <section data-p="tree" hidden>
       <div class="filters">
+        <select id="treePick"><option value="">Pick a column or measure…</option></select>
         <select id="dir">
           <option value="up">Upward — who consumes this (lineage)</option>
           <option value="down">Downward — what this consumes</option>
         </select>
-        <span class="muted" id="treeFor">Select an object in the Objects tab.</span>
+        <span class="muted" id="treeFor"></span>
       </div>
-      <div class="tree" id="tree"><div class="empty">No object selected.</div></div>
+      <div class="tree" id="tree"><div class="empty">Pick an object above, or click any row in the Objects tab.</div></div>
     </section>
 
     <section data-p="m" hidden>
@@ -248,7 +249,7 @@ async function run(){
     const res = await api('/api/analyze', {method:'POST', headers:{'content-type':'application/json'},
       body: JSON.stringify({path})});
     renderLog(res.log);
-    if(res.ok){ renderSummary(res.summary); loadObjects(); mEntries=[]; loadRules();
+    if(res.ok){ renderSummary(res.summary); loadObjects(); fillTreePicker(); mEntries=[]; loadRules();
       $('#expJson').disabled = $('#expDb').disabled = false; }
     else { $('#summary').innerHTML = '<div class="muted">No model metadata in this file.</div>'; }
   }catch(err){
@@ -340,13 +341,26 @@ function updateSel(){
 
 /* ---------------------------------------------------------------- tree -- */
 $('#dir').addEventListener('change', () => current && showTree(current));
+$('#treePick').addEventListener('change', e => { if(e.target.value) showTree(e.target.value); });
+
+async function fillTreePicker(){
+  const {rows} = await api('/api/objects');
+  const sel = $('#treePick');
+  sel.innerHTML = '<option value="">Pick a column or measure…</option>';
+  rows.filter(r => r.kind==='column' || r.kind==='measure')
+      .forEach(r => { const o = el('option', null, `${r.table? r.table+'[' + r.name + ']' : r.name}  · ${r.status}`);
+                      o.value = r.id; sel.appendChild(o); });
+}
 
 async function showTree(id, label){
   current = id;
   document.querySelectorAll('#rows tr').forEach(tr => tr.classList.toggle('sel', tr.dataset.id===id));
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.t==='tree'));
   document.querySelectorAll('section[data-p]').forEach(s => s.hidden = s.dataset.p!=='tree');
-  $('#treeFor').textContent = label ? `for ${label}` : '';
+  $('#treePick').value = id;
+  const node = $('#treePick').selectedOptions[0];
+  $('#treeFor').textContent = $('#dir').value === 'up'
+    ? 'everything that consumes this object' : 'everything this object consumes';
   const {tree} = await api('/api/tree?node='+encodeURIComponent(id)+'&direction='+$('#dir').value);
   const box = $('#tree'); box.innerHTML = '';
   box.appendChild(renderNode(tree, true));
@@ -362,6 +376,15 @@ function renderNode(n, root){
   li.appendChild(el('b', null, n.label));
   li.appendChild(el('span','edge', ' · ' + n.kind + (n.edge_kind ? ` · ${n.edge_kind}/${n.confidence}` : '')));
   if(n.evidence) li.appendChild(el('span','ev', n.evidence));
+  if(n.extra_evidence && n.extra_evidence.length){
+    const more = el('span','ev', `+${n.extra_evidence.length} more reference${n.extra_evidence.length>1?'s':''} — click to show`);
+    more.style.cursor='pointer';
+    more.addEventListener('click', () => {
+      more.remove();
+      n.extra_evidence.forEach(e => li.appendChild(el('span','ev', e)));
+    });
+    li.appendChild(more);
+  }
   if(n.cycle) li.appendChild(el('span','edge',' (already shown)'));
   n.children.forEach(c => li.appendChild(renderNode(c, false)));
   ul.appendChild(li);
@@ -443,7 +466,7 @@ function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout
 api('/api/state').then(s => {
   if(s.source) $('#path').value = s.source;
   if(s.log && s.log.length) renderLog(s.log);
-  if(s.loaded){ renderSummary(s.summary); loadObjects();
+  if(s.loaded){ renderSummary(s.summary); loadObjects(); fillTreePicker();
     $('#expJson').disabled = $('#expDb').disabled = false; }
 }).catch(()=>{});
 </script>
