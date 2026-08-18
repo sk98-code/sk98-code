@@ -17,11 +17,11 @@ from pathlib import Path
 from pbi_lineage.readers.bim import read_model_bim
 from pbi_lineage.readers.layout_legacy import parse_layout
 from pbi_lineage.readers.pbir import read_report_definition
-from pbi_lineage.readers.pbix import read_pbix
+from pbi_lineage.readers.pbix import read_pbix, read_pbix_bytes
 from pbi_lineage.readers.tmdl import read_definition_dir
 from pbi_lineage.schema import LiveConnection, ReadResult
 
-__all__ = ["detect_format", "read_any", "read_pbip", "read_pbix"]
+__all__ = ["detect_format", "read_any", "read_pbip", "read_pbix", "read_pbix_bytes"]
 
 _DATASET_ID_RE = re.compile(r"(?i)initial catalog\s*=\s*([^;]+)")
 

@@ -36,33 +36,43 @@ def decode_layout(raw: bytes) -> dict:
 
 def read_pbix(path: str | Path) -> ReadResult:
     path = Path(path)
-    result = ReadResult(source_path=str(path), source_format="pbix")
-
     with zipfile.ZipFile(path) as package:
-        names = set(package.namelist())
+        return _read_package(package, source=str(path), name=path.stem)
 
-        if "Report/Layout" in names:
-            try:
-                layout = decode_layout(package.read("Report/Layout"))
-                result.report = parse_layout(layout, name=path.stem, warnings=result.warnings)
-            except ValueError as exc:
-                result.warnings.append(f"Report/Layout: {exc}")
-        else:
-            result.warnings.append("no Report/Layout part found")
 
-        if "Connections" in names:
-            result.connection = _parse_connections(package.read("Connections"), result.warnings)
+def read_pbix_bytes(data: bytes, *, name: str) -> ReadResult:
+    """Parse PBIX content already in memory — e.g. a report Export from the
+    REST API (§5.4.3) — without touching disk."""
+    with zipfile.ZipFile(io.BytesIO(data)) as package:
+        return _read_package(package, source=f"<bytes:{name}>", name=name)
 
-        has_model = "DataModel" in names
-        if has_model:
-            result.warnings.append(
-                "DataModel (ABF) present but not parsed — use live Desktop mode (M2) "
-                "or an extractor library for model inventory"
-            )
-        result.is_thin = not has_model and result.connection is not None
 
-        if "DataMashup" in names:
-            result.m_section = _extract_m_section(package.read("DataMashup"), result.warnings)
+def _read_package(package: zipfile.ZipFile, *, source: str, name: str) -> ReadResult:
+    result = ReadResult(source_path=source, source_format="pbix")
+    parts = set(package.namelist())
+
+    if "Report/Layout" in parts:
+        try:
+            layout = decode_layout(package.read("Report/Layout"))
+            result.report = parse_layout(layout, name=name, warnings=result.warnings)
+        except ValueError as exc:
+            result.warnings.append(f"Report/Layout: {exc}")
+    else:
+        result.warnings.append("no Report/Layout part found")
+
+    if "Connections" in parts:
+        result.connection = _parse_connections(package.read("Connections"), result.warnings)
+
+    has_model = "DataModel" in parts
+    if has_model:
+        result.warnings.append(
+            "DataModel (ABF) present but not parsed — use live Desktop mode (M2) "
+            "or an extractor library for model inventory"
+        )
+    result.is_thin = not has_model and result.connection is not None
+
+    if "DataMashup" in parts:
+        result.m_section = _extract_m_section(package.read("DataMashup"), result.warnings)
 
     return result
 
