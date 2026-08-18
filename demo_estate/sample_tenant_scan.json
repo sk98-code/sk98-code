@@ -1,0 +1,374 @@
+{
+ "datasourceInstances": [
+  {
+   "datasourceId": "src-sql-1",
+   "datasourceType": "Sql",
+   "connectionDetails": {
+    "server": "dwh.corp.local",
+    "database": "SalesDW"
+   }
+  },
+  {
+   "datasourceId": "src-sql-2",
+   "datasourceType": "Sql",
+   "connectionDetails": {
+    "server": "dwh.corp.local",
+    "database": "FinanceDW"
+   }
+  },
+  {
+   "datasourceId": "src-lake",
+   "datasourceType": "Databricks",
+   "connectionDetails": {
+    "server": "adb-123.azuredatabricks.net",
+    "database": "gold"
+   }
+  },
+  {
+   "datasourceId": "src-file",
+   "datasourceType": "File",
+   "connectionDetails": {
+    "path": "//fileserver/budgets/budget.xlsx"
+   }
+  }
+ ],
+ "workspaces": [
+  {
+   "id": "ws-fin",
+   "name": "Finance",
+   "type": "Workspace",
+   "capacityId": "cap-p1",
+   "capacitySku": "P1",
+   "isOnDedicatedCapacity": true,
+   "users": [
+    {
+     "emailAddress": "ada@corp.com",
+     "groupUserAccessRight": "Admin",
+     "principalType": "User"
+    },
+    {
+     "emailAddress": "bob@corp.com",
+     "groupUserAccessRight": "Member",
+     "principalType": "User"
+    },
+    {
+     "emailAddress": "viewer@corp.com",
+     "groupUserAccessRight": "Viewer",
+     "principalType": "User"
+    }
+   ],
+   "datasets": [
+    {
+     "id": "ds-sales",
+     "name": "Sales Model",
+     "configuredBy": "ada@corp.com",
+     "createdDate": "2024-03-11T08:00:00Z",
+     "targetStorageMode": "Import",
+     "datasourceUsages": [
+      {
+       "datasourceInstanceId": "src-sql-1"
+      }
+     ],
+     "tables": [
+      {
+       "name": "Sales",
+       "columns": [
+        {
+         "name": "Qty"
+        },
+        {
+         "name": "Region"
+        },
+        {
+         "name": "DiscountCode"
+        },
+        {
+         "name": "Margin"
+        }
+       ],
+       "measures": [
+        {
+         "name": "Total Sales",
+         "expression": "SUM(Sales[Qty])"
+        },
+        {
+         "name": "Margin %",
+         "expression": "DIVIDE([Total Sales],SUM(Sales[Margin]))"
+        }
+       ]
+      },
+      {
+       "name": "Geo",
+       "columns": [
+        {
+         "name": "Region"
+        },
+        {
+         "name": "Country"
+        },
+        {
+         "name": "Unused Geo Col"
+        }
+       ]
+      }
+     ],
+     "roles": [
+      {
+       "name": "EMEA",
+       "members": [
+        {
+         "memberName": "viewer@corp.com"
+        }
+       ],
+       "tablePermissions": [
+        {
+         "name": "Geo",
+         "filterExpression": "[Country] = \"DE\""
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "id": "ds-budget",
+     "name": "Budget Model",
+     "configuredBy": "bob@corp.com",
+     "datasourceUsages": [
+      {
+       "datasourceInstanceId": "src-file"
+      }
+     ],
+     "tables": [
+      {
+       "name": "Budget",
+       "columns": [
+        {
+         "name": "Amount"
+        },
+        {
+         "name": "Period"
+        }
+       ],
+       "measures": []
+      }
+     ]
+    }
+   ],
+   "reports": [
+    {
+     "id": "r-ops",
+     "name": "Ops Dashboard",
+     "datasetId": "ds-sales",
+     "customVisuals": [
+      "Sankey",
+      "BulletChart"
+     ]
+    },
+    {
+     "id": "r-exec",
+     "name": "Exec Summary",
+     "datasetId": "ds-sales",
+     "customVisuals": [
+      "Sankey"
+     ]
+    },
+    {
+     "id": "r-stale",
+     "name": "Old Q1 Review",
+     "datasetId": "ds-sales",
+     "customVisuals": []
+    },
+    {
+     "id": "r-paginated",
+     "name": "Invoice Run",
+     "datasetId": "ds-sales",
+     "reportType": "PaginatedReport"
+    }
+   ],
+   "dataflows": [
+    {
+     "objectId": "df-stage",
+     "name": "Sales Staging",
+     "generation": 2,
+     "configuredBy": "ada@corp.com",
+     "modifiedDateTime": "2026-07-01T10:00:00Z",
+     "entities": [
+      {
+       "name": "CleanSales"
+      },
+      {
+       "name": "CleanGeo"
+      }
+     ]
+    }
+   ],
+   "apps": [
+    {
+     "id": "app-fin",
+     "name": "Finance App",
+     "publishedBy": "ada@corp.com",
+     "audiences": [
+      {
+       "name": "Execs",
+       "users": [
+        {
+         "emailAddress": "cfo@corp.com"
+        }
+       ]
+      },
+      {
+       "name": "Analysts",
+       "users": [
+        {
+         "emailAddress": "bob@corp.com"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "ws-mkt",
+   "name": "Marketing",
+   "type": "Workspace",
+   "capacityId": "cap-p1",
+   "capacitySku": "P1",
+   "isOnDedicatedCapacity": true,
+   "users": [
+    {
+     "emailAddress": "cara@corp.com",
+     "groupUserAccessRight": "Admin",
+     "principalType": "User"
+    },
+    {
+     "emailAddress": "bob@corp.com",
+     "groupUserAccessRight": "Contributor",
+     "principalType": "User"
+    }
+   ],
+   "datasets": [
+    {
+     "id": "ds-campaign",
+     "name": "Campaign Model",
+     "configuredBy": "cara@corp.com",
+     "datasourceUsages": [
+      {
+       "datasourceInstanceId": "src-lake"
+      }
+     ],
+     "upstreamDataflows": [
+      {
+       "targetDataflowId": "df-stage"
+      }
+     ],
+     "tables": [
+      {
+       "name": "Campaign",
+       "columns": [
+        {
+         "name": "Spend"
+        },
+        {
+         "name": "Channel"
+        }
+       ],
+       "measures": [
+        {
+         "name": "ROI",
+         "expression": "DIVIDE([Revenue],SUM(Campaign[Spend]))"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "reports": [
+    {
+     "id": "r-mkt",
+     "name": "Campaign Perf",
+     "datasetId": "ds-campaign",
+     "customVisuals": [
+      "Sankey"
+     ]
+    },
+    {
+     "id": "r-cross",
+     "name": "Sales x Marketing",
+     "datasetId": "ds-sales",
+     "datasetWorkspaceId": "ws-fin"
+    }
+   ],
+   "notebooks": [
+    {
+     "id": "nb-1",
+     "name": "attribution model",
+     "createdBy": "cara@corp.com",
+     "upstreamDatasets": [
+      {
+       "targetDatasetId": "ds-campaign"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "ws-sandbox",
+   "name": "Data Science Sandbox",
+   "type": "Workspace",
+   "users": [],
+   "datasets": [
+    {
+     "id": "ds-scratch",
+     "name": "Scratch",
+     "configuredBy": "cara@corp.com",
+     "datasourceUsages": [
+      {
+       "datasourceInstanceId": "src-lake"
+      }
+     ],
+     "tables": []
+    }
+   ],
+   "reports": [
+    {
+     "id": "r-scratch",
+     "name": "Scratch Report",
+     "datasetId": "ds-scratch"
+    }
+   ]
+  },
+  {
+   "id": "ws-personal",
+   "name": "ada@corp.com",
+   "type": "PersonalGroup",
+   "users": [
+    {
+     "emailAddress": "ada@corp.com",
+     "groupUserAccessRight": "Admin",
+     "principalType": "User"
+    }
+   ],
+   "datasets": [
+    {
+     "id": "ds-personal",
+     "name": "My Model",
+     "configuredBy": "ada@corp.com",
+     "datasourceUsages": [
+      {
+       "datasourceInstanceId": "src-sql-2"
+      }
+     ],
+     "tables": []
+    }
+   ],
+   "reports": [
+    {
+     "id": "r-personal",
+     "name": "My Report",
+     "datasetId": "ds-personal"
+    }
+   ]
+  }
+ ]
+}

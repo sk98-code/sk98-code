@@ -173,3 +173,140 @@ def test_export_json(client, tmp_path):
     response = client.get("/api/export", params={"fmt": "json"})
     assert response.status_code == 200
     assert b'"verdicts"' in response.content
+
+
+# ---------------------------------------------------------------------------
+# Service / tenant mode
+# ---------------------------------------------------------------------------
+
+import json as _json  # noqa: E402
+
+_SCAN = {
+    "datasourceInstances": [
+        {
+            "datasourceId": "src1",
+            "datasourceType": "Sql",
+            "connectionDetails": {"server": "dwh", "database": "SalesDW"},
+        }
+    ],
+    "workspaces": [
+        {
+            "id": "ws1",
+            "name": "Finance",
+            "capacitySku": "P1",
+            "capacityId": "c1",
+            "users": [{"emailAddress": "ada@x.com", "groupUserAccessRight": "Admin"}],
+            "datasets": [
+                {
+                    "id": "ds1",
+                    "name": "Sales Model",
+                    "configuredBy": "ada@x.com",
+                    "datasourceUsages": [{"datasourceInstanceId": "src1"}],
+                    "roles": [
+                        {
+                            "name": "EMEA",
+                            "members": [{"memberName": "bob@x.com"}],
+                            "tablePermissions": [{"name": "Geo", "filterExpression": '[C]="DE"'}],
+                        }
+                    ],
+                }
+            ],
+            "reports": [{"id": "r1", "name": "Ops", "datasetId": "ds1", "customVisuals": ["Sankey"]}],
+        },
+        {
+            "id": "ws2",
+            "name": "Marketing",
+            "users": [],
+            "reports": [{"id": "r2", "name": "Cross", "datasetId": "ds1", "datasetWorkspaceId": "ws1"}],
+        },
+    ],
+}
+
+_ACTIVITY = [
+    {"Activity": "ViewReport", "ReportId": "r1", "UserId": "u1", "CreationTime": "2026-08-01T10:00:00Z"},
+    {"Activity": "AnalyzedByExternalApplication", "DatasetId": "ds1", "UserId": "cfo@x.com"},
+]
+
+
+def _tenant_files(tmp_path):
+    scan = tmp_path / "scan.json"
+    scan.write_text(_json.dumps(_SCAN))
+    activity = tmp_path / "activity.json"
+    activity.write_text(_json.dumps(_ACTIVITY))
+    return str(scan), str(activity)
+
+
+def test_tenant_state_empty_before_load(client):
+    body = client.get("/api/tenant/state").json()
+    assert body["loaded"] is False
+
+
+def test_tenant_replay_load(client, tmp_path):
+    scan, activity = _tenant_files(tmp_path)
+    body = client.post(
+        "/api/tenant/load", json={"mode": "replay", "path": scan, "activity_path": activity}
+    ).json()
+    assert body["ok"] is True
+    summary = body["summary"]
+    assert summary["workspaces"] == 2
+    assert summary["items"]["reports"] == 2
+    # a workspace with no admin is surfaced, not hidden in a percentage
+    assert "Marketing" in summary["orphaned_workspaces"]
+    messages = " ".join(row["message"] for row in body["log"])
+    assert "Replaying scan payload" in messages
+
+
+def test_tenant_load_rejects_missing_and_bad_files(client, tmp_path):
+    assert client.post("/api/tenant/load", json={"mode": "replay", "path": "/nope.json"}).status_code == 400
+    junk = tmp_path / "junk.json"
+    junk.write_text("not json")
+    assert client.post("/api/tenant/load", json={"mode": "replay", "path": str(junk)}).status_code == 400
+
+
+def test_live_mode_without_a_token_explains_how_to_get_one(client):
+    response = client.post("/api/tenant/load", json={"mode": "live"})
+    assert response.status_code == 400
+    assert "token" in response.json()["detail"].lower()
+
+
+def test_tenant_reports_require_a_loaded_scan(client):
+    assert client.get("/api/tenant/usage").status_code == 400
+
+
+def test_tenant_reports(client, tmp_path):
+    scan, activity = _tenant_files(tmp_path)
+    client.post("/api/tenant/load", json={"mode": "replay", "path": scan, "activity_path": activity})
+
+    usage = client.get("/api/tenant/usage").json()["rows"]
+    by_name = {r["report"]: r for r in usage}
+    assert by_name["Ops"]["views"] == 1
+    assert by_name["Cross"]["never_viewed"] is True
+
+    security = client.get("/api/tenant/security").json()["rows"]
+    assert security[0]["kind"] == "RLS" and security[0]["role"] == "EMEA"
+
+    access = client.get("/api/tenant/access").json()["rows"]
+    assert any(r["principal"] == "ada@x.com" and r["right"] == "Admin" for r in access)
+
+    visuals = client.get("/api/tenant/custom-visuals").json()["rows"]
+    assert visuals[0]["custom_visual"] == "Sankey"
+
+    excel = client.get("/api/tenant/excel-users").json()["rows"]
+    assert excel[0]["user"] == "cfo@x.com"
+
+    assert client.get("/api/tenant/nonsense").status_code == 404
+
+
+def test_tenant_lineage_views(client, tmp_path):
+    scan, _ = _tenant_files(tmp_path)
+    client.post("/api/tenant/load", json={"mode": "replay", "path": scan})
+
+    sources = client.get("/api/tenant/lineage/items?view=sources").json()["rows"]
+    assert sources[0]["source"] == "dwh.SalesDW"
+    assert sources[0]["report_count"] == 2
+
+    models = client.get("/api/tenant/lineage/items?view=models").json()["rows"]
+    model = next(m for m in models if m["model"] == "Sales Model")
+    # the Marketing report consumes a Finance model — the dependency that
+    # breaks workspace reorganisations, so it is listed on its own
+    assert [c["name"] for c in model["cross_workspace"]] == ["Cross"]

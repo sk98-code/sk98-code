@@ -14,7 +14,7 @@ tenant · **No** — not built.
 | Feature | Status | Notes |
 |---|---|---|
 | Power BI Desktop file (.pbix, .pbip) | **Yes** | `.pbix` model needs the `pbi-file` extra (pbixray) |
-| Shared semantic models in Service | **Engine only** | `service/xmla.py`; needs Premium/PPU/Fabric |
+| Shared semantic models in Service | **Partial** | `service/xmla.py` + Service UI; XMLA read needs Premium/PPU/Fabric and has never run against a real tenant |
 | Online thin / live reports | **Engine only** | `service/thin_reports.py`, export + parse |
 | Paginated reports | **Engine only** | `readers/rdl.py`, DAX/MDX query text |
 | Excel · Analyze in Excel | **Partial** | Detected from the activity log and used to cap confidence; workbooks live outside the tenant and are never parsed |
@@ -83,17 +83,17 @@ building.
 |---|---|---|
 | Best-practice analysis | **Yes** | 12 rules, data-driven |
 | Custom (user-defined) rules | **Partial** | `Rule` records are data; no config-file loader yet |
-| Tenant summary | **Engine only** | `governance.tenant_summary`, incl. orphaned workspaces |
-| Access & permissions tracking | **Engine only** | `governance.access_matrix` |
+| Tenant summary | **Yes (UI)** | Tenant tab; orphaned workspaces surfaced |
+| Access & permissions tracking | **Yes (UI)** | `governance.access_matrix` |
 | RLS & OLS | **Partial** | RLS fully; OLS only where the payload exposes it |
-| Semantic model inventory + refresh events | **Engine only** | `governance.model_inventory` |
-| Dataflow inventory (Gen1+Gen2) + refresh | **Engine only** | `governance.dataflow_inventory` |
-| Apps & audiences | **Engine only** | `governance.apps_and_audiences` |
-| Find Excel users across the tenant | **Engine only** | `governance.excel_users` |
+| Semantic model inventory + refresh events | **Yes (UI)** | `governance.model_inventory` |
+| Dataflow inventory (Gen1+Gen2) + refresh | **Yes (UI)** | `governance.dataflow_inventory` |
+| Apps & audiences | **Yes (UI)** | `governance.apps_and_audiences` |
+| Find Excel users across the tenant | **Yes (UI)** | `governance.excel_users` |
 | Report performance | **No** | Needs the capacity metrics / query-log APIs |
-| Page-level usage & consumption | **Engine only** | `governance.page_usage` from ViewReportPage events |
-| Custom visual consumption | **Engine only** | `governance.custom_visual_usage` |
-| Report subscriptions | **Engine only** | `governance.subscriptions` |
+| Page-level usage & consumption | **Yes (UI)** | `governance.page_usage` from ViewReportPage events |
+| Custom visual consumption | **Yes (UI)** | `governance.custom_visual_usage` |
+| Report subscriptions | **Yes (UI)** | `governance.subscriptions` |
 | Broken visuals detection | **Yes** | Rule + `unresolved` references with evidence |
 | Broken DAX detection | **Yes** | Rule over unresolved DAX references |
 | Capacity metrics with history | **Partial** | Inventory + refresh counts; no historical tracking |
@@ -130,6 +130,25 @@ building.
 | Write results anywhere | **Partial** | JSON, SQLite, Delta tables; no Teams/warehouse writer |
 | Email or Teams alerts | **No** | |
 | Track tenant changes over time | **No** | Each scan is a snapshot; `modifiedSince` deltas exist but no history store |
+
+## Service mode
+
+The UI now has a **Power BI Service** mode with two ways in:
+
+- **Replay** — point it at a saved Scanner payload (and optionally an
+  activity-log export). Everything downstream is a pure transform, so the
+  entire tenant surface is browsable, shareable and testable offline. This
+  is how the Service UI is verified in CI and how the screenshots were
+  produced; `demo_estate/sample_tenant_scan.json` is a runnable sample.
+- **Live** — a bearer token drives a real Scanner run. Get one with
+  `az account get-access-token --resource https://analysis.windows.net/powerbi/api`,
+  or run `pbi-lineage tenant` with a service principal and replay the saved
+  payload afterwards.
+
+**This has still never touched a real tenant.** Every payload shape comes
+from the documented APIs, not from observation. The replay path is fully
+exercised; the live path's HTTP layer is exercised only against a fake
+transport.
 
 ## The honest summary
 

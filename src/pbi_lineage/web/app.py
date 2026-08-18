@@ -20,8 +20,13 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 from pbi_lineage.graph import nid_column, nid_measure
-from pbi_lineage import cleanup
-from pbi_lineage.lineage import attach_sources, end_to_end_rows, local_item_lineage
+from pbi_lineage import cleanup, governance
+from pbi_lineage.lineage import (
+    attach_sources,
+    end_to_end_rows,
+    local_item_lineage,
+    tenant_item_lineage,
+)
 from pbi_lineage.mindex import MExpressionIndex
 from pbi_lineage.persist import ScanBundle, write_json, write_sqlite
 from pbi_lineage.readers import detect_format, read_any
@@ -53,6 +58,42 @@ class AnalyzeIn(BaseModel):
     path: str
 
 
+class TenantIn(BaseModel):
+    """Request models must live at module level: `from __future__ import
+    annotations` stringifies the hints and FastAPI resolves them only from
+    module globals, so a class nested in the factory fails at request time."""
+
+    mode: str = "replay"  # "replay" | "live"
+    path: str = ""  # replay: a saved Scanner payload
+    activity_path: str = ""  # optional activity-log JSON
+    token: str = ""  # live: a bearer token
+    workspace_ids: list[str] = []
+
+
+@dataclass
+class TenantSession:
+    """A tenant scan held in memory: the raw payloads plus what was derived
+    from them. Populated either from a live Scanner run or by replaying a
+    saved payload, which is the same data either way."""
+
+    source: str | None = None
+    mode: str = ""  # "live" | "replay"
+    scan: dict = field(default_factory=dict)
+    activity: list = field(default_factory=list)
+    capacities: list = field(default_factory=list)
+    subscriptions: list = field(default_factory=list)
+    refreshables: list = field(default_factory=list)
+    bundles: list = field(default_factory=list)
+    log: list[dict] = field(default_factory=list)
+
+    @property
+    def loaded(self) -> bool:
+        return bool(self.scan.get("workspaces"))
+
+    def note(self, message: str, level: str = "info") -> None:
+        self.log.append({"time": datetime.now().strftime("%H:%M:%S"), "level": level, "message": message})
+
+
 @dataclass
 class Session:
     """Everything produced by the most recent analysis."""
@@ -77,7 +118,9 @@ class Session:
 def create_app() -> FastAPI:
     app = FastAPI(title="pbi-lineage", docs_url="/api/docs")
     session = Session()
+    tenant = TenantSession()
     app.state.session = session
+    app.state.tenant = tenant
 
     # ---------------------------------------------------------------- UI --
 
@@ -510,6 +553,113 @@ def create_app() -> FastAPI:
         `view=models` shows each model's upstream and downstream at once."""
         bundle = _require(session)
         graph = local_item_lineage(bundle.model, session.m_index, bundle.reports)
+        return {"view": view, "rows": graph["data_sources"] if view == "sources" else graph["models"]}
+
+    # ---------------------------------------------------- Service / tenant --
+
+    @app.post("/api/tenant/load")
+    def tenant_load(payload: TenantIn) -> dict:
+        """Load a tenant either by replaying a saved Scanner payload or by
+        running a live scan. Replay exists because a scan is expensive and
+        because an analysis should be reviewable offline and shareable."""
+        tenant.__init__()  # reset
+        if payload.mode == "replay":
+            path = Path(payload.path.strip().strip('"').strip("'")).expanduser()
+            if not path.exists():
+                raise HTTPException(400, f"Path does not exist: {path}")
+            tenant.note(f"Replaying scan payload: {path}")
+            try:
+                tenant.scan = json.loads(path.read_text(encoding="utf-8"))
+            except ValueError as exc:
+                raise HTTPException(400, f"Not a JSON scan payload: {exc}") from exc
+            if payload.activity_path:
+                activity_path = Path(payload.activity_path).expanduser()
+                if activity_path.exists():
+                    events = json.loads(activity_path.read_text(encoding="utf-8"))
+                    tenant.activity = (
+                        events.get("activityEventEntities", []) if isinstance(events, dict) else events
+                    )
+                    tenant.note(f"Loaded {len(tenant.activity)} activity event(s)")
+            tenant.source = str(path)
+            tenant.mode = "replay"
+        else:
+            if not payload.token:
+                raise HTTPException(
+                    400,
+                    "A live scan needs a bearer token. Get one with `az account get-access-token "
+                    "--resource https://analysis.windows.net/powerbi/api`, or run "
+                    "`pbi-lineage tenant` with a service principal and replay the saved payload.",
+                )
+            from pbi_lineage.service.rest import HttpxTransport, RestClient, StaticToken, TokenBucket
+            from pbi_lineage.service.scanner import ScannerClient
+
+            client = RestClient(HttpxTransport(), StaticToken(payload.token), bucket=TokenBucket(500, 3600.0))
+            out_dir = Path.home() / ".pbi_lineage" / "scan"
+            scanner = ScannerClient(client, out_dir)
+            ok, message = scanner.preflight()
+            tenant.note(message, "info" if ok else "error")
+            ids = payload.workspace_ids or scanner.list_workspace_ids()
+            tenant.note(f"Scanning {len(ids)} workspace(s)")
+            outcome = scanner.scan(ids)
+            for warning in outcome.warnings:
+                tenant.note(warning, "warn")
+            tenant.scan = scanner.merged_result()
+            tenant.source = str(out_dir)
+            tenant.mode = "live"
+            if not outcome.complete:
+                tenant.note("scan incomplete — some workspace batches failed", "warn")
+
+        workspaces = tenant.scan.get("workspaces", []) or []
+        if not workspaces:
+            raise HTTPException(400, "payload contains no workspaces")
+        tenant.note(f"{len(workspaces)} workspace(s) loaded")
+        return {"ok": True, "log": tenant.log, "summary": governance.tenant_summary(tenant.scan).as_dict()}
+
+    def _tenant() -> TenantSession:
+        if not tenant.loaded:
+            raise HTTPException(400, "no tenant scan loaded")
+        return tenant
+
+    @app.get("/api/tenant/state")
+    def tenant_state() -> dict:
+        return {
+            "loaded": tenant.loaded,
+            "mode": tenant.mode,
+            "source": tenant.source,
+            "log": tenant.log,
+            "summary": governance.tenant_summary(tenant.scan).as_dict() if tenant.loaded else None,
+        }
+
+    @app.get("/api/tenant/{report}")
+    def tenant_report(report: str) -> dict:
+        """One governance report per name — every one is a pure transform of
+        the loaded payloads, so nothing here re-contacts the Service."""
+        state = _tenant()
+        builders = {
+            "summary": lambda: [governance.tenant_summary(state.scan).as_dict()],
+            "access": lambda: governance.access_matrix(state.scan),
+            "security": lambda: governance.security_rules(state.scan),
+            "models": lambda: governance.model_inventory(state.scan, state.refreshables),
+            "dataflows": lambda: governance.dataflow_inventory(state.scan),
+            "notebooks": lambda: governance.notebook_inventory(state.scan),
+            "apps": lambda: governance.apps_and_audiences(state.scan),
+            "usage": lambda: governance.report_usage(state.scan, state.activity),
+            "pages": lambda: governance.page_usage(state.activity),
+            "excel-users": lambda: governance.excel_users(state.activity),
+            "custom-visuals": lambda: governance.custom_visual_usage(state.scan),
+            "subscriptions": lambda: governance.subscriptions(state.subscriptions),
+            "capacities": lambda: governance.capacity_metrics(state.capacities, state.refreshables),
+        }
+        builder = builders.get(report)
+        if builder is None:
+            raise HTTPException(404, f"unknown tenant report '{report}'")
+        rows = builder()
+        return {"report": report, "rows": rows, "total": len(rows)}
+
+    @app.get("/api/tenant/lineage/items")
+    def tenant_lineage_items(view: str = "sources") -> dict:
+        state = _tenant()
+        graph = tenant_item_lineage(state.scan)
         return {"view": view, "rows": graph["data_sources"] if view == "sources" else graph["models"]}
 
     # ------------------------------------------------------------ export --

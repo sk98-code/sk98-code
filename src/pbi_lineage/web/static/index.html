@@ -119,7 +119,18 @@
 
 <header>
   <h1>pbi-lineage <span id="ver"></span></h1>
+  <select id="mode" title="What to analyze">
+    <option value="local">Local file</option>
+    <option value="service">Power BI Service</option>
+  </select>
   <input type="text" id="path" placeholder="Path to a .pbix file or .pbip project folder">
+  <input type="text" id="tpath" placeholder="Saved Scanner payload (.json)" hidden>
+  <input type="text" id="tact" placeholder="Activity log .json (optional)" hidden>
+  <input type="text" id="ttoken" placeholder="Bearer token (live scan)" hidden>
+  <select id="tmode" hidden>
+    <option value="replay">Replay a saved scan</option>
+    <option value="live">Live scan</option>
+  </select>
   <button class="primary" id="run">Analyze</button>
   <button id="expJson" disabled>Export JSON</button>
   <button id="expDb" disabled>Export SQLite</button>
@@ -144,6 +155,7 @@
   <div class="panel">
     <nav id="tabs">
       <button data-t="objects" class="on">Objects</button>
+      <button data-t="tenant" id="tabTenant" hidden>Tenant</button>
       <button data-t="items">Lineage</button>
       <button data-t="e2e">Source → Visual</button>
       <button data-t="tree">Dependency tree</button>
@@ -178,6 +190,30 @@
       </div>
       <div class="note">Tick objects to build a removal preview. Only objects whose status is
         exactly <b>Unused</b> can be scripted for deletion.</div>
+    </section>
+
+    <section data-p="tenant" hidden>
+      <div class="filters">
+        <select id="tReport">
+          <option value="summary">Tenant summary</option>
+          <option value="lineage-sources">Lineage — data sources</option>
+          <option value="lineage-models">Lineage — models &amp; dataflows</option>
+          <option value="usage">Report usage &amp; never-viewed</option>
+          <option value="pages">Page-level usage</option>
+          <option value="access">Access &amp; permissions</option>
+          <option value="security">RLS / OLS</option>
+          <option value="models">Semantic model inventory</option>
+          <option value="dataflows">Dataflow inventory</option>
+          <option value="notebooks">Notebook inventory</option>
+          <option value="apps">Apps &amp; audiences</option>
+          <option value="excel-users">Analyze-in-Excel users</option>
+          <option value="custom-visuals">Custom visual consumption</option>
+          <option value="subscriptions">Report subscriptions</option>
+          <option value="capacities">Capacities</option>
+        </select>
+        <span class="muted" id="tCount"></span>
+      </div>
+      <div class="scroll" id="tenantBox"><div class="empty">Load a tenant scan first.</div></div>
     </section>
 
     <section data-p="items" hidden>
@@ -327,11 +363,30 @@ $('#tabs').addEventListener('click', e => {
   if(b.dataset.t==='items') loadItems();
 });
 
+/* ------------------------------------------------------------ mode -- */
+$('#mode').addEventListener('change', () => {
+  const service = $('#mode').value === 'service';
+  $('#path').hidden = service;
+  $('#tmode').hidden = !service;
+  syncServiceInputs();
+  $('#run').textContent = service ? 'Load tenant' : 'Analyze';
+});
+$('#tmode').addEventListener('change', syncServiceInputs);
+
+function syncServiceInputs(){
+  const service = $('#mode').value === 'service';
+  const live = $('#tmode').value === 'live';
+  $('#tpath').hidden  = !service || live;
+  $('#tact').hidden   = !service || live;
+  $('#ttoken').hidden = !service || !live;
+}
+
 /* ------------------------------------------------------------- analyze -- */
 $('#run').addEventListener('click', run);
 $('#path').addEventListener('keydown', e => { if(e.key==='Enter') run(); });
 
 async function run(){
+  if($('#mode').value === 'service') return runTenant();
   const path = $('#path').value.trim();
   if(!path){ alert('Enter the path to a .pbix file or .pbip project folder.'); return; }
   $('#run').disabled = true; $('#run').textContent = 'Analyzing…';
@@ -548,15 +603,94 @@ $('#planBtn').addEventListener('click', async () => {
   }catch(err){ box.innerHTML=''; box.appendChild(el('div','note', err.message)); }
 });
 
+/* --------------------------------------------------- service / tenant -- */
+async function runTenant(){
+  $('#run').disabled = true; $('#run').textContent = 'Loading…';
+  $('#log').innerHTML = '<div class="empty">Running…</div>';
+  try{
+    const body = {
+      mode: $('#tmode').value,
+      path: $('#tpath').value.trim(),
+      activity_path: $('#tact').value.trim(),
+      token: $('#ttoken').value.trim(),
+    };
+    const res = await api('/api/tenant/load', {method:'POST',
+      headers:{'content-type':'application/json'}, body: JSON.stringify(body)});
+    renderLog(res.log);
+    renderTenantSummary(res.summary);
+    $('#tabTenant').hidden = false;
+    document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.t==='tenant'));
+    document.querySelectorAll('section[data-p]').forEach(s => s.hidden = s.dataset.p!=='tenant');
+    loadTenantReport();
+  }catch(err){
+    $('#log').innerHTML='';
+    renderLog([{time:new Date().toLocaleTimeString(), level:'error', message: err.message}]);
+  }finally{ $('#run').disabled=false; $('#run').textContent='Load tenant'; }
+}
+
+function renderTenantSummary(s){
+  const box = $('#summary'); box.innerHTML='';
+  const head = el('div','headline', s.workspaces + ' workspaces');
+  head.appendChild(el('small', null, `${s.users} distinct principals`));
+  box.appendChild(head);
+  const add = (k,v) => { const d=el('div','stat'); d.appendChild(el('span',null,k));
+    d.appendChild(el('b',null,String(v))); box.appendChild(d); };
+  Object.entries(s.items||{}).forEach(([k,v]) => add(k, v));
+  Object.entries(s.by_capacity||{}).forEach(([k,v]) => add('capacity: '+k, v));
+  if((s.orphaned_workspaces||[]).length) add('workspaces with no admin', s.orphaned_workspaces.length);
+}
+
+$('#tReport').addEventListener('change', loadTenantReport);
+
+async function loadTenantReport(){
+  const which = $('#tReport').value;
+  const box = $('#tenantBox'); box.innerHTML = '<div class="empty">Loading…</div>';
+  try{
+    if(which.startsWith('lineage-')){
+      const view = which.split('-')[1] === 'sources' ? 'sources' : 'models';
+      const {rows} = await api('/api/tenant/lineage/items?view='+view);
+      $('#tCount').textContent = rows.length + ' row' + (rows.length===1?'':'s');
+      renderItemRows(box, rows, view);
+      return;
+    }
+    const {rows,total} = await api('/api/tenant/'+which);
+    $('#tCount').textContent = total + ' row' + (total===1?'':'s');
+    box.innerHTML='';
+    if(!rows.length){ box.innerHTML='<div class="empty">No rows — this payload has none of these.</div>'; return; }
+    const cols = [...new Set(rows.flatMap(r => Object.keys(r)))];
+    const table = el('table');
+    table.innerHTML = '<thead><tr>' + cols.map(c=>`<th>${c.replace(/_/g,' ')}</th>`).join('') + '</tr></thead>';
+    const tb = el('tbody');
+    rows.forEach(r => {
+      const tr = el('tr');
+      cols.forEach(c => {
+        let v = r[c];
+        if(Array.isArray(v)) v = v.join(', ');
+        else if(v && typeof v === 'object') v = JSON.stringify(v);
+        else if(v === true) v = 'yes';
+        else if(v === false) v = '';
+        tr.appendChild(el('td', c==='status'?'':'why', v===null||v===undefined?'':String(v)));
+      });
+      tb.appendChild(tr);
+    });
+    table.appendChild(tb); box.appendChild(table);
+  }catch(err){ box.innerHTML=''; box.appendChild(el('div','note', err.message)); }
+}
+
 /* ------------------------------------------------------ item lineage -- */
 $('#itemView').addEventListener('change', loadItems);
 
 async function loadItems(){
   const view = $('#itemView').value;
   const {rows} = await api('/api/lineage/items?view='+view);
-  const box = $('#itemBox'); box.innerHTML='';
+  const box = $('#itemBox');
   $('#itemCount').textContent = rows.length + (view==='sources' ? ' source' : ' item') + (rows.length===1?'':'s');
-  if(!rows.length){ box.innerHTML='<div class="empty">No item-level lineage — the model has no resolvable source.</div>'; return; }
+  renderItemRows(box, rows, view);
+}
+
+function renderItemRows(box, rows, view){
+  box.innerHTML='';
+  if(!rows.length){ box.innerHTML='<div class="empty">No item-level lineage found.</div>'; return; }
 
   if(view==='sources'){
     rows.forEach(r => {
