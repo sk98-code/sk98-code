@@ -81,7 +81,7 @@ def test_analyze_produces_log_and_summary(client):
     summary = body["summary"]
     assert summary["model"] == "Demo"
     assert summary["columns"]["total"] == 3
-    assert summary["columns"]["unused"] == 1          # DiscountCode
+    assert summary["columns"]["unused"] == 1  # DiscountCode
     assert summary["by_status"]["Used"] >= 2
     assert summary["duration_s"] is not None
 
@@ -104,14 +104,14 @@ def test_objects_filtering(client):
 
     used = client.get("/api/objects", params={"status": "Used", "kind": "column"}).json()
     qty = next(r for r in used["rows"] if r["name"] == "Qty")
-    assert qty["reasons"] or qty["evidence"]      # a verdict always carries its justification
+    assert qty["reasons"] or qty["evidence"]  # a verdict always carries its justification
 
 
 def test_tree_both_directions(client):
     client.post("/api/analyze", json={"path": client.project})
     up = client.get("/api/tree", params={"node": "column:Sales[Qty]", "direction": "up"}).json()
     labels = _labels(up["tree"])
-    assert "Total Sales" in labels          # the measure consumes the column
+    assert "Total Sales" in labels  # the measure consumes the column
 
     down = client.get("/api/tree", params={"node": "measure:Total Sales", "direction": "down"}).json()
     assert "Sales[Qty]" in _labels(down["tree"])

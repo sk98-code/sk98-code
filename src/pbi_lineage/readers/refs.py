@@ -60,6 +60,14 @@ def collect_aliases(node: Any, aliases: dict[str, str] | None = None) -> dict[st
     return aliases
 
 
+def is_transform_output(expression: Any) -> bool:
+    """True for `TransformTableRef` expressions — the output columns of a
+    visual-level analytics transform (forecast, clustering, …). They look
+    like columns but exist only inside the visual, so they are never model
+    references and must not be reported as broken ones."""
+    return isinstance(expression, dict) and "TransformTableRef" in expression
+
+
 def _resolve_source(expression: Any, aliases: dict[str, str]) -> str | None:
     if not isinstance(expression, dict):
         return None
@@ -86,6 +94,8 @@ def scan_refs(
         for key, kind in _REF_KEYS.items():
             inner = node.get(key)
             if isinstance(inner, dict) and "Property" in inner:
+                if is_transform_output(inner.get("Expression")):
+                    continue
                 out.append(
                     FieldReference(
                         table=_resolve_source(inner.get("Expression"), aliases),

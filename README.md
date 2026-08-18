@@ -205,11 +205,11 @@ blocks the delete script. Model-internal categories from §5.3
 references, key columns, calculation groups, incremental refresh) are
 protected with a recorded reason.
 
-`pytest tests/test_pbil_*.py` — 127 tests, including the §5.3 hiding-place
+`pytest tests/test_pbil_*.py` — 133 tests, including the §5.3 hiding-place
 fixtures, all seven §5.4.8 thin-report fixtures, the §13.4 destructive test
 (delete everything marked unused, re-analyze, assert zero broken
 references) and the §13.5 scale test (500 workspaces / 5000 reports,
 rate-limited, resumable after a forced kill).
 
-Optional extras: `.[pbi-desktop]` (pyadomd, Windows) for live Desktop and
+Optional extras: `.[pbi-file]` (pbixray) to read a `.pbix` model offline, `.[pbi-desktop]` (pyadomd, Windows) for live Desktop and
 XMLA, `.[pbi-service]` (msal, httpx) for Service and tenant scans.

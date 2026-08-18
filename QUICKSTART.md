@@ -18,8 +18,12 @@ cd sk98-code
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
-pip install -e ".[dev]"
+pip install -e ".[dev,pbi-file]"
 ```
+
+`pbi-file` adds **pbixray**, which reads the model out of a `.pbix` file's
+binary `DataModel` part. Without it you still get the full report analysis,
+but no tables/columns/measures from a `.pbix` (PBIP projects always work).
 
 That installs both packages plus the test tooling, and puts two commands on
 your PATH: `pbi-lineage` and `bimigrate`.
@@ -30,7 +34,7 @@ your PATH: `pbi-lineage` and `bimigrate`.
 pytest -q
 ```
 
-Expected: **195 passed**. If that passes, everything is wired correctly.
+Expected: **201 passed**. If that passes, everything is wired correctly.
 
 ## 3. Web UI (sabse aasan tareeka)
 

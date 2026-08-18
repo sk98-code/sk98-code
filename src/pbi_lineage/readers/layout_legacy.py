@@ -107,6 +107,36 @@ def _parse_visual_container(container: dict, path: str, warnings: list[str]) -> 
             out=refs,
         )
     refs.extend(_parse_filters(container.get("filters"), scope="visual:filter", path=f"{path}.filters"))
+    # The executed query carries `Where` clauses that `prototypeQuery` does
+    # not — a field filtered there and projected nowhere would otherwise read
+    # as unused (§5.3: filters on fields not shown in the visual).
+    query = loads_maybe(container.get("query"))
+    if query is None and isinstance(container.get("query"), dict):
+        query = container["query"]
+    if query is not None:
+        query_aliases = collect_aliases(query) or aliases
+        for section_key, scope in (
+            ("Where", "visual:filter"),
+            ("Select", "visual:projection"),
+            ("OrderBy", "visual:sort"),
+            ("GroupBy", "visual:projection"),
+        ):
+            scan_refs(
+                _query_section(query, section_key),
+                aliases=query_aliases,
+                scope=scope,
+                path=f"{path}.query.{section_key}",
+                out=refs,
+            )
+    transforms = loads_maybe(container.get("dataTransforms"))
+    if transforms is not None:
+        scan_refs(
+            transforms,
+            aliases=aliases,
+            scope="visual:other",
+            path=f"{path}.dataTransforms",
+            out=refs,
+        )
     # generic deep scan over whatever remains — custom visuals hide
     # references in non-standard places (§5.3)
     handled = {"prototypeQuery", "orderBy", "objects", "vcObjects", "projections", "columnProperties"}
@@ -161,3 +191,22 @@ def _parse_model_extensions(config: dict) -> list[ReportLevelMeasure]:
                     )
                 )
     return measures
+
+
+def _query_section(query, key):
+    """Pull one section out of a visual's executed query, whether it is a bare
+    `Query` object or wrapped in `Commands[].SemanticQueryDataShapeCommand`."""
+    found = []
+
+    def visit(node):
+        if isinstance(node, dict):
+            if key in node and ("From" in node or "Select" in node or "Where" in node):
+                found.append(node[key])
+            for value in node.values():
+                visit(value)
+        elif isinstance(node, list):
+            for value in node:
+                visit(value)
+
+    visit(query)
+    return found

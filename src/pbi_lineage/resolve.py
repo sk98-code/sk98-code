@@ -552,8 +552,17 @@ def analyze_model(
     rl_index = _add_report_level_measures(graph, model, reports, result)  # before visual refs
     _add_report_edges(graph, model, reports, rl_index, result)
 
-    reached = graph.reachable()
+    # Protected objects (relationship endpoints, hierarchy levels, sort-by
+    # targets, RLS references …) are in use by definition, so they must seed
+    # the walk as roots — otherwise whatever *they* depend on stays
+    # unreachable and reads as unused. A calculated column kept alive by a
+    # hierarchy still feeds the columns its DAX references.
     protected = _protected_reasons(model)
+    for node_id, reasons in protected.items():
+        if node_id in graph.nodes:
+            graph.mark_root(node_id, reasons[0])
+
+    reached = graph.reachable()
 
     def verdict(node_id: str, kind: str, table: str | None, name: str, is_hidden: bool) -> UsageVerdict:
         if node_id in reached:

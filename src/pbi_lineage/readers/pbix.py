@@ -37,7 +37,7 @@ def decode_layout(raw: bytes) -> dict:
 def read_pbix(path: str | Path) -> ReadResult:
     path = Path(path)
     with zipfile.ZipFile(path) as package:
-        return _read_package(package, source=str(path), name=path.stem)
+        return _read_package(package, source=str(path), name=path.stem, model_path=path)
 
 
 def read_pbix_bytes(data: bytes, *, name: str) -> ReadResult:
@@ -47,7 +47,9 @@ def read_pbix_bytes(data: bytes, *, name: str) -> ReadResult:
         return _read_package(package, source=f"<bytes:{name}>", name=name)
 
 
-def _read_package(package: zipfile.ZipFile, *, source: str, name: str) -> ReadResult:
+def _read_package(
+    package: zipfile.ZipFile, *, source: str, name: str, model_path: Path | None = None
+) -> ReadResult:
     result = ReadResult(source_path=source, source_format="pbix")
     parts = set(package.namelist())
 
@@ -64,10 +66,20 @@ def _read_package(package: zipfile.ZipFile, *, source: str, name: str) -> ReadRe
         result.connection = _parse_connections(package.read("Connections"), result.warnings)
 
     has_model = "DataModel" in parts
-    if has_model:
+    if has_model and model_path is not None:
+        # §4.1: don't hand-parse the ABF binary — hand it to an extractor.
+        from pbi_lineage.readers.abf import read_model_from_pbix  # noqa: PLC0415 — optional
+
+        result.model = read_model_from_pbix(model_path, result.warnings)
+        if result.model is None:
+            result.warnings.append(
+                "DataModel (ABF) present but not read — install the pbi-file extra, "
+                "or use live Desktop mode (M2), for model inventory"
+            )
+    elif has_model:
         result.warnings.append(
-            "DataModel (ABF) present but not parsed — use live Desktop mode (M2) "
-            "or an extractor library for model inventory"
+            "DataModel (ABF) present but not parsed — model inventory needs the file "
+            "on disk (use read_pbix) or live Desktop mode (M2)"
         )
     result.is_thin = not has_model and result.connection is not None
 

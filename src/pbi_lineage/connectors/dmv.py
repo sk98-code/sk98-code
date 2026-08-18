@@ -76,6 +76,16 @@ _MODEL_PERMISSIONS = {1: "none", 2: "read", 3: "readRefresh", 4: "refresh", 5: "
 
 _ROW_NUMBER_COLUMN_TYPE = 3  # internal RowNumber columns are not inventory
 
+# VertiPaq's internal structures are published alongside real tables by some
+# extractors: H$ attribute hierarchies, U$ user hierarchies, R$ relationship
+# indexes. They are storage artifacts, not model objects, and must never
+# appear in the inventory (their bytes are attributed in `size.py` instead).
+_INTERNAL_TABLE_PREFIXES = ("H$", "U$", "R$")
+
+
+def _is_internal_table(name: Any) -> bool:
+    return isinstance(name, str) and name.startswith(_INTERNAL_TABLE_PREFIXES)
+
 
 def _get(row: dict, *names: str, default: Any = None) -> Any:
     """Case-insensitive column lookup — ADOMD clients differ on casing."""
@@ -139,12 +149,15 @@ def read_model_via_dmv(executor: DmvExecutor, *, name: str = "", warnings: list[
     # ---- columns keyed by ID first: sort-by / level / relationship joins --
     columns_by_id: dict[Any, Column] = {}
     column_table: dict[Any, Any] = {}
+    column_table_name: dict[Any, str] = {}
     for row in column_rows:
         if _get(row, "Type") is not None and int(_get(row, "Type")) == _ROW_NUMBER_COLUMN_TYPE:
             continue
+        if _is_internal_table(_get(row, "TableName")):
+            continue
         column = Column(
-            name=_get(row, "ExplicitName") or _get(row, "InferredName") or "",
-            data_type=_enum(_DATA_TYPES, _get(row, "ExplicitDataType"), "dataType"),
+            name=_get(row, "ExplicitName", "InferredName", "Name") or "",
+            data_type=_enum(_DATA_TYPES, _get(row, "ExplicitDataType", "DataType"), "dataType"),
             is_hidden=_bool(_get(row, "IsHidden")),
             is_key=_bool(_get(row, "IsKey")),
             is_calculated=(_get(row, "Type") is not None and int(_get(row, "Type")) in (2, 4)),
@@ -156,6 +169,8 @@ def read_model_via_dmv(executor: DmvExecutor, *, name: str = "", warnings: list[
         )
         columns_by_id[_get(row, "ID")] = column
         column_table[_get(row, "ID")] = _get(row, "TableID")
+        if _get(row, "TableName"):
+            column_table_name[_get(row, "ID")] = str(_get(row, "TableName"))
     for row in column_rows:
         sort_by = _get(row, "SortByColumnID")
         if sort_by and sort_by in columns_by_id and _get(row, "ID") in columns_by_id:
@@ -173,6 +188,17 @@ def read_model_via_dmv(executor: DmvExecutor, *, name: str = "", warnings: list[
         model.tables.append(table)
     for column_id, column in columns_by_id.items():
         table = tables_by_id.get(column_table[column_id])
+        if table is None:
+            # Some extractors publish fewer tables than columns (auto
+            # date/time tables in particular). Dropping the columns would
+            # hide real objects, so rebuild the parent from its name.
+            fallback_name = column_table_name.get(column_id)
+            if fallback_name and not _is_internal_table(fallback_name):
+                table = next((x for x in model.tables if x.name == fallback_name), None)
+                if table is None:
+                    table = Table(name=fallback_name)
+                    model.tables.append(table)
+                tables_by_id.setdefault(column_table[column_id], table)
         if table is not None:
             table.columns.append(column)
 
