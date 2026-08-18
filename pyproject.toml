@@ -39,6 +39,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 "bimigrate.kb" = ["data/*.json"]
 "bimigrate.web" = ["static/*.html", "static/dist/*", "static/dist/assets/*"]
+"pbi_lineage.web" = ["static/*.html"]
 
 [tool.ruff]
 line-length = 110

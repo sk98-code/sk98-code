@@ -140,6 +140,28 @@ def tenant(
     click.echo(output.summary())
 
 
+@main.command()
+@click.option("--host", default="127.0.0.1", help="Bind address (localhost by default)")
+@click.option("--port", default=8777, type=int)
+@click.option("--open-browser/--no-open-browser", default=True)
+def ui(host: str, port: int, open_browser: bool) -> None:
+    """Launch the local web UI (analysis runs on this machine only)."""
+    try:
+        import uvicorn  # noqa: PLC0415 — optional [web] extra
+    except ImportError as exc:
+        raise click.ClickException('the UI needs the web extra: pip install -e ".[web]"') from exc
+    from pbi_lineage.web.app import create_app
+
+    url = f"http://{host}:{port}"
+    click.echo(f"pbi-lineage UI on {url}  (Ctrl+C to stop)")
+    if open_browser:
+        import threading
+        import webbrowser
+
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    uvicorn.run(create_app(), host=host, port=port, log_level="warning")
+
+
 @main.command("removal-plan")
 @click.argument("path", type=click.Path(exists=True))
 @click.option("--object", "objects", multiple=True, help="Table[Column] or [Measure] to remove")

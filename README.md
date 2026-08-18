@@ -155,6 +155,7 @@ built to `docs/pbi_lineage_build_spec.md`. **All 12 milestones (1–11 plus
 7b) are implemented.**
 
 ```bash
+pbi-lineage ui                                      # local web UI (analyze, lineage, removal preview)
 pbi-lineage analyze Sales.pbix --out ./results      # M1: local file
 pbi-lineage live --pbix Sales.pbix                  # M2: attach to Desktop
 pbi-lineage tenant --client-id … --out ./scan       # M5: whole tenant
@@ -204,7 +205,7 @@ blocks the delete script. Model-internal categories from §5.3
 references, key columns, calculation groups, incremental refresh) are
 protected with a recorded reason.
 
-`pytest tests/test_pbil_*.py` — 115 tests, including the §5.3 hiding-place
+`pytest tests/test_pbil_*.py` — 127 tests, including the §5.3 hiding-place
 fixtures, all seven §5.4.8 thin-report fixtures, the §13.4 destructive test
 (delete everything marked unused, re-analyze, assert zero broken
 references) and the §13.5 scale test (500 workspaces / 5000 reports,

@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pbi-lineage</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --panel:#fff; --line:#dfe3e8; --ink:#1c2430; --muted:#66707c;
+    --accent:#2f6fd0; --accent-soft:#e8f0fc;
+    --used:#1f8f4e; --used-bg:#e7f5ec;
+    --unused:#b4520a; --unused-bg:#fdf0e4;
+    --manual:#6b3fa0; --manual-bg:#f1ebfa;
+    --indet:#1f6f8f; --indet-bg:#e6f2f6;
+    --extern:#5c6672; --extern-bg:#eef0f2;
+    --err:#c0392b; --warn:#a56a00;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#161a1f; --panel:#1d2229; --line:#2e353e; --ink:#e6e9ed; --muted:#98a2ae;
+      --accent:#5b9bf8; --accent-soft:#1e2a3d;
+      --used:#4cc47f; --used-bg:#16301f;
+      --unused:#e2934a; --unused-bg:#33220f;
+      --manual:#b18cf0; --manual-bg:#251b33;
+      --indet:#5fb6d4; --indet-bg:#122831;
+      --extern:#9aa5b1; --extern-bg:#242a31;
+      --err:#f0776a; --warn:#e0a83c;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+  code,pre,.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+
+  header{display:flex;gap:10px;align-items:center;padding:10px 14px;background:var(--panel);
+    border-bottom:1px solid var(--line);flex-wrap:wrap;position:sticky;top:0;z-index:5}
+  header h1{font-size:15px;margin:0 12px 0 0;font-weight:650;letter-spacing:.2px}
+  header h1 span{color:var(--muted);font-weight:400}
+  input[type=text]{flex:1;min-width:260px;padding:7px 10px;border:1px solid var(--line);
+    border-radius:6px;background:var(--bg);color:var(--ink)}
+  button{padding:7px 13px;border:1px solid var(--line);border-radius:6px;background:var(--panel);
+    color:var(--ink);cursor:pointer;font-size:13px}
+  button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.primary:hover:not(:disabled){opacity:.9;color:#fff}
+
+  .wrap{display:grid;grid-template-columns:340px 1fr;gap:12px;padding:12px;align-items:start}
+  @media (max-width:900px){.wrap{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .panel h2{margin:0;padding:9px 12px;font-size:12px;text-transform:uppercase;letter-spacing:.6px;
+    color:var(--muted);border-bottom:1px solid var(--line);font-weight:600}
+  .pad{padding:10px 12px}
+
+  /* summary */
+  .stat{display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line)}
+  .stat:last-child{border-bottom:0}
+  .stat b{font-variant-numeric:tabular-nums}
+  .headline{font-size:26px;font-weight:700;line-height:1.1}
+  .headline small{display:block;font-size:12px;font-weight:400;color:var(--muted);margin-top:3px}
+
+  /* log */
+  #log{max-height:280px;overflow:auto;font-size:12px}
+  #log .row{display:flex;gap:8px;padding:3px 12px;border-bottom:1px solid var(--line)}
+  #log .row:last-child{border-bottom:0}
+  #log time{color:var(--muted);white-space:nowrap}
+  #log .warn{color:var(--warn)} #log .error{color:var(--err)}
+
+  /* tabs */
+  nav{display:flex;gap:2px;padding:0 8px;background:var(--panel);border-bottom:1px solid var(--line);
+    flex-wrap:wrap}
+  nav button{border:0;border-bottom:2px solid transparent;border-radius:0;padding:9px 12px;background:none}
+  nav button.on{border-bottom-color:var(--accent);color:var(--accent);font-weight:600}
+
+  .filters{display:flex;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  select,.filters input{padding:6px 9px;border:1px solid var(--line);border-radius:6px;
+    background:var(--bg);color:var(--ink);font-size:13px}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;padding:7px 12px;color:var(--muted);font-weight:600;font-size:11px;
+    text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--line);
+    position:sticky;top:0;background:var(--panel)}
+  td{padding:6px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  tbody tr{cursor:pointer}
+  tbody tr:hover{background:var(--accent-soft)}
+  tbody tr.sel{background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent)}
+  .scroll{max-height:calc(100vh - 260px);overflow:auto}
+
+  .pill{display:inline-block;padding:1px 8px;border-radius:20px;font-size:11px;font-weight:600;
+    white-space:nowrap}
+  .s-Used{background:var(--used-bg);color:var(--used)}
+  .s-Unused{background:var(--unused-bg);color:var(--unused)}
+  .s-manual{background:var(--manual-bg);color:var(--manual)}
+  .s-indet{background:var(--indet-bg);color:var(--indet)}
+  .s-extern{background:var(--extern-bg);color:var(--extern)}
+  .kind{color:var(--muted);font-size:12px}
+  .muted{color:var(--muted)}
+  .why{font-size:12px;color:var(--muted);margin-top:2px;word-break:break-word}
+
+  /* tree */
+  .tree{font-size:13px;padding:10px 12px}
+  .tree ul{list-style:none;margin:0;padding-left:16px;border-left:1px dotted var(--line)}
+  .tree > ul{padding-left:0;border-left:0}
+  .tree li{margin:3px 0}
+  .tree .edge{font-size:11px;color:var(--muted);margin-left:6px}
+  .tree .ev{font-size:11px;color:var(--muted);display:block;margin-left:14px;word-break:break-all}
+
+  pre.code{margin:0;padding:12px;background:var(--bg);border-top:1px solid var(--line);
+    font-size:12px;overflow:auto;max-height:60vh;white-space:pre-wrap;word-break:break-word}
+  .sev-error{color:var(--err);font-weight:600}
+  .sev-warning{color:var(--warn);font-weight:600}
+  .sev-info{color:var(--muted)}
+  .empty{padding:28px 14px;text-align:center;color:var(--muted)}
+  .bar{height:6px;background:var(--line);border-radius:4px;overflow:hidden;margin-top:8px}
+  .bar i{display:block;height:100%;background:var(--accent)}
+  .note{font-size:12px;color:var(--muted);padding:8px 12px;border-top:1px solid var(--line)}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>pbi-lineage <span id="ver"></span></h1>
+  <input type="text" id="path" placeholder="Path to a .pbix file or .pbip project folder">
+  <button class="primary" id="run">Analyze</button>
+  <button id="expJson" disabled>Export JSON</button>
+  <button id="expDb" disabled>Export SQLite</button>
+</header>
+
+<div class="wrap">
+  <div>
+    <div class="panel" style="margin-bottom:12px">
+      <h2>Execution summary</h2>
+      <div class="pad" id="summary"><div class="muted">Nothing analyzed yet.</div></div>
+    </div>
+    <div class="panel">
+      <h2>Execution log</h2>
+      <div id="log"><div class="empty">Log will appear here.</div></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <nav id="tabs">
+      <button data-t="objects" class="on">Objects</button>
+      <button data-t="tree">Dependency tree</button>
+      <button data-t="m">M expressions</button>
+      <button data-t="rules">Best practices</button>
+      <button data-t="removal">Removal preview</button>
+    </nav>
+
+    <section data-p="objects">
+      <div class="filters">
+        <select id="fKind">
+          <option value="">All kinds</option>
+          <option value="column">Columns</option>
+          <option value="measure">Measures</option>
+          <option value="table">Tables</option>
+          <option value="hierarchy">Hierarchies</option>
+          <option value="calc_item">Calculation items</option>
+        </select>
+        <select id="fStatus"><option value="">All statuses</option></select>
+        <input type="text" id="fQ" placeholder="Search name or table…">
+        <span class="muted" id="count"></span>
+      </div>
+      <div class="scroll">
+        <table><thead><tr>
+          <th style="width:26px"></th><th>Name</th><th>Table</th><th>Kind</th><th>Status</th><th>Why</th>
+        </tr></thead><tbody id="rows"></tbody></table>
+      </div>
+      <div class="note">Tick objects to build a removal preview. Only objects whose status is
+        exactly <b>Unused</b> can be scripted for deletion.</div>
+    </section>
+
+    <section data-p="tree" hidden>
+      <div class="filters">
+        <select id="dir">
+          <option value="up">Upward — who consumes this (lineage)</option>
+          <option value="down">Downward — what this consumes</option>
+        </select>
+        <span class="muted" id="treeFor">Select an object in the Objects tab.</span>
+      </div>
+      <div class="tree" id="tree"><div class="empty">No object selected.</div></div>
+    </section>
+
+    <section data-p="m" hidden>
+      <div class="filters">
+        <input type="text" id="mQ" placeholder="Search all M code (e.g. a table or view name)…">
+        <span class="muted" id="mCount"></span>
+      </div>
+      <div class="scroll">
+        <table><thead><tr><th>Query</th><th>Kind</th><th>Upstream source</th></tr></thead>
+        <tbody id="mRows"></tbody></table>
+      </div>
+      <pre class="code" id="mCode" hidden></pre>
+    </section>
+
+    <section data-p="rules" hidden>
+      <div class="scroll">
+        <table><thead><tr><th>Severity</th><th>Rule</th><th>Finding</th></tr></thead>
+        <tbody id="ruleRows"></tbody></table>
+      </div>
+    </section>
+
+    <section data-p="removal" hidden>
+      <div class="filters">
+        <button class="primary" id="planBtn">Preview impact</button>
+        <span class="muted" id="planCount">0 selected</span>
+      </div>
+      <div id="plan"><div class="empty">Select objects in the Objects tab, then preview.</div></div>
+    </section>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const el = (t, c, txt) => { const n = document.createElement(t); if(c) n.className=c;
+  if(txt!==undefined) n.textContent=txt; return n; };
+let selected = new Set();      // object ids ticked for removal
+let current = null;            // object id shown in the tree
+let mEntries = [];
+
+const statusClass = s => s==='Used' ? 's-Used' : s==='Unused' ? 's-Unused'
+  : s.startsWith('Unused (') ? 's-manual' : s.startsWith('Indeterminate') ? 's-indet' : 's-extern';
+
+async function api(url, opts){
+  const r = await fetch(url, opts);
+  if(!r.ok){ const b = await r.json().catch(()=>({detail:r.statusText})); throw new Error(b.detail||'request failed'); }
+  return r.json();
+}
+
+/* ---------------------------------------------------------------- tabs -- */
+$('#tabs').addEventListener('click', e => {
+  const b = e.target.closest('button'); if(!b) return;
+  document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('on', x===b));
+  document.querySelectorAll('section[data-p]').forEach(s=>s.hidden = s.dataset.p !== b.dataset.t);
+  if(b.dataset.t==='m' && !mEntries.length) loadM();
+  if(b.dataset.t==='rules') loadRules();
+});
+
+/* ------------------------------------------------------------- analyze -- */
+$('#run').addEventListener('click', run);
+$('#path').addEventListener('keydown', e => { if(e.key==='Enter') run(); });
+
+async function run(){
+  const path = $('#path').value.trim();
+  if(!path){ alert('Enter the path to a .pbix file or .pbip project folder.'); return; }
+  $('#run').disabled = true; $('#run').textContent = 'Analyzing…';
+  $('#log').innerHTML = '<div class="empty">Running…</div>';
+  try{
+    const res = await api('/api/analyze', {method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify({path})});
+    renderLog(res.log);
+    if(res.ok){ renderSummary(res.summary); loadObjects(); mEntries=[]; loadRules();
+      $('#expJson').disabled = $('#expDb').disabled = false; }
+    else { $('#summary').innerHTML = '<div class="muted">No model metadata in this file.</div>'; }
+  }catch(err){
+    $('#log').innerHTML = '';
+    renderLog([{time:new Date().toLocaleTimeString(), level:'error', message: err.message}]);
+  }finally{ $('#run').disabled=false; $('#run').textContent='Analyze'; }
+}
+
+function renderLog(rows){
+  const box = $('#log'); box.innerHTML = '';
+  if(!rows.length){ box.innerHTML = '<div class="empty">No log entries.</div>'; return; }
+  rows.forEach(r => {
+    const row = el('div','row');
+    row.appendChild(el('time', null, r.time));
+    row.appendChild(el('span', r.level, r.message));
+    box.appendChild(row);
+  });
+  box.scrollTop = box.scrollHeight;
+}
+
+function renderSummary(s){
+  const box = $('#summary'); box.innerHTML = '';
+  const head = el('div','headline', s.columns.unused + ' unused columns');
+  head.appendChild(el('small', null,
+    `${s.unused_pct}% of ${s.columns.total} · model "${s.model}" · ${s.duration_s}s`));
+  box.appendChild(head);
+  const bar = el('div','bar'); const fill = el('i'); fill.style.width = s.unused_pct + '%';
+  bar.appendChild(fill); box.appendChild(bar);
+
+  const add = (k,v) => { const d = el('div','stat'); d.appendChild(el('span',null,k));
+    d.appendChild(el('b',null,String(v))); box.appendChild(d); };
+  box.appendChild(el('div','stat'));
+  add('Tables', s.tables);
+  add('Measures unused', `${s.measures.unused} of ${s.measures.total}`);
+  add('Calc. columns unused', `${s.calc_columns.unused} of ${s.calc_columns.total}`);
+  add('Hierarchies unused', `${s.hierarchies.unused} of ${s.hierarchies.total}`);
+  add('Relationships', s.relationships.total);
+  add('  many-to-many', s.relationships.many_to_many);
+  add('  bi-directional', s.relationships.bidirectional);
+  add('  inactive', s.relationships.inactive);
+  add('Best-practice findings', s.findings.total);
+  if(s.unresolved) add('Broken references', s.unresolved);
+
+  const statusSel = $('#fStatus');
+  statusSel.innerHTML = '<option value="">All statuses</option>';
+  Object.entries(s.by_status).forEach(([k,v]) => {
+    if(!v) return;
+    const o = el('option', null, `${k} (${v})`); o.value = k; statusSel.appendChild(o);
+  });
+}
+
+/* ------------------------------------------------------------- objects -- */
+['#fKind','#fStatus'].forEach(s => $(s).addEventListener('change', loadObjects));
+$('#fQ').addEventListener('input', debounce(loadObjects, 250));
+
+async function loadObjects(){
+  const p = new URLSearchParams({kind:$('#fKind').value, status:$('#fStatus').value, q:$('#fQ').value});
+  const {rows,total} = await api('/api/objects?'+p);
+  $('#count').textContent = total + ' object' + (total===1?'':'s');
+  const tb = $('#rows'); tb.innerHTML = '';
+  if(!rows.length){ tb.innerHTML = '<tr><td colspan="6" class="empty">No objects match.</td></tr>'; return; }
+  rows.forEach(r => {
+    const tr = el('tr'); tr.dataset.id = r.id;
+    if(r.id===current) tr.className='sel';
+
+    const tdC = el('td');
+    const cb = el('input'); cb.type='checkbox'; cb.checked = selected.has(r.id);
+    cb.disabled = !r.deletable;
+    cb.title = r.deletable ? 'Include in removal preview' : 'Only "Unused" objects can be scripted';
+    cb.addEventListener('click', e => { e.stopPropagation();
+      cb.checked ? selected.add(r.id) : selected.delete(r.id); updateSel(); });
+    tdC.appendChild(cb); tr.appendChild(tdC);
+
+    tr.appendChild(el('td', null, r.name));
+    tr.appendChild(el('td','muted', r.table||''));
+    tr.appendChild(el('td','kind', r.kind + (r.hidden?' · hidden':'')));
+    const tdS = el('td'); tdS.appendChild(el('span','pill '+statusClass(r.status), r.status)); tr.appendChild(tdS);
+    const why = [...(r.reasons||[]), ...(r.evidence||[])].slice(0,2).join(' · ');
+    tr.appendChild(el('td','why', why));
+
+    tr.addEventListener('click', () => showTree(r.id, r.name));
+    tb.appendChild(tr);
+  });
+}
+
+function updateSel(){
+  $('#planCount').textContent = selected.size + ' selected';
+}
+
+/* ---------------------------------------------------------------- tree -- */
+$('#dir').addEventListener('change', () => current && showTree(current));
+
+async function showTree(id, label){
+  current = id;
+  document.querySelectorAll('#rows tr').forEach(tr => tr.classList.toggle('sel', tr.dataset.id===id));
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.t==='tree'));
+  document.querySelectorAll('section[data-p]').forEach(s => s.hidden = s.dataset.p!=='tree');
+  $('#treeFor').textContent = label ? `for ${label}` : '';
+  const {tree} = await api('/api/tree?node='+encodeURIComponent(id)+'&direction='+$('#dir').value);
+  const box = $('#tree'); box.innerHTML = '';
+  box.appendChild(renderNode(tree, true));
+  if(!tree.children.length){
+    box.appendChild(el('div','note',
+      $('#dir').value==='up' ? 'Nothing consumes this object — that is why it reads as unused.'
+                             : 'This object does not consume anything else.'));
+  }
+}
+
+function renderNode(n, root){
+  const ul = el('ul'); const li = el('li');
+  li.appendChild(el('b', null, n.label));
+  li.appendChild(el('span','edge', ' · ' + n.kind + (n.edge_kind ? ` · ${n.edge_kind}/${n.confidence}` : '')));
+  if(n.evidence) li.appendChild(el('span','ev', n.evidence));
+  if(n.cycle) li.appendChild(el('span','edge',' (already shown)'));
+  n.children.forEach(c => li.appendChild(renderNode(c, false)));
+  ul.appendChild(li);
+  return ul;
+}
+
+/* ------------------------------------------------------- M expressions -- */
+$('#mQ').addEventListener('input', debounce(loadM, 250));
+
+async function loadM(){
+  const {entries} = await api('/api/m-expressions?q='+encodeURIComponent($('#mQ').value));
+  mEntries = entries;
+  $('#mCount').textContent = entries.length + ' quer' + (entries.length===1?'y':'ies');
+  const tb = $('#mRows'); tb.innerHTML=''; $('#mCode').hidden = true;
+  if(!entries.length){ tb.innerHTML='<tr><td colspan="3" class="empty">No M code matches.</td></tr>'; return; }
+  entries.forEach((e,i) => {
+    const tr = el('tr');
+    tr.appendChild(el('td', null, e.name));
+    tr.appendChild(el('td','kind', e.kind));
+    tr.appendChild(el('td','muted', (e.sources||[]).join(' · ')));
+    tr.addEventListener('click', () => {
+      document.querySelectorAll('#mRows tr').forEach(x=>x.classList.remove('sel'));
+      tr.classList.add('sel');
+      $('#mCode').textContent = e.code; $('#mCode').hidden = false;
+      $('#mCode').scrollIntoView({behavior:'smooth', block:'nearest'});
+    });
+    tb.appendChild(tr);
+  });
+}
+
+/* ------------------------------------------------------------- findings -- */
+async function loadRules(){
+  const {rows} = await api('/api/findings');
+  const tb = $('#ruleRows'); tb.innerHTML='';
+  if(!rows.length){ tb.innerHTML='<tr><td colspan="3" class="empty">No findings.</td></tr>'; return; }
+  rows.forEach(r => {
+    const tr = el('tr');
+    tr.appendChild(el('td','sev-'+r.severity, r.severity));
+    tr.appendChild(el('td','muted', r.rule));
+    tr.appendChild(el('td', null, r.message));
+    tb.appendChild(tr);
+  });
+}
+
+/* -------------------------------------------------------------- removal -- */
+$('#planBtn').addEventListener('click', async () => {
+  if(!selected.size){ alert('Tick at least one Unused object in the Objects tab.'); return; }
+  const box = $('#plan'); box.innerHTML = '<div class="empty">Building preview…</div>';
+  try{
+    const p = await api('/api/removal-plan', {method:'POST',
+      headers:{'content-type':'application/json'}, body: JSON.stringify({objects:[...selected]})});
+    box.innerHTML = '';
+    const head = el('div','pad');
+    head.appendChild(el('div','headline', p.blocked ? 'BLOCKED' : 'Safe to script'));
+    head.appendChild(el('div','why', p.summary));
+    box.appendChild(head);
+    if(p.impact.length){
+      const t = el('table');
+      t.innerHTML = '<thead><tr><th>Impact</th><th>Detail</th></tr></thead>';
+      const tb = el('tbody');
+      p.impact.forEach(i => { const tr=el('tr');
+        tr.appendChild(el('td', null, i.kind)); tr.appendChild(el('td','muted', i.detail)); tb.appendChild(tr); });
+      t.appendChild(tb); box.appendChild(t);
+    }
+    if(p.tmsl){
+      box.appendChild(el('div','note','TMSL delete script — review, then run against your model. A backup script is generated alongside it.'));
+      const pre = el('pre','code', p.tmsl); box.appendChild(pre);
+    }
+  }catch(err){ box.innerHTML=''; box.appendChild(el('div','note', err.message)); }
+});
+
+/* --------------------------------------------------------------- export -- */
+$('#expJson').addEventListener('click', ()=> location.href='/api/export?fmt=json');
+$('#expDb').addEventListener('click', ()=> location.href='/api/export?fmt=sqlite');
+
+function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
+
+/* restore any existing session (e.g. after a refresh) */
+api('/api/state').then(s => {
+  if(s.source) $('#path').value = s.source;
+  if(s.log && s.log.length) renderLog(s.log);
+  if(s.loaded){ renderSummary(s.summary); loadObjects();
+    $('#expJson').disabled = $('#expDb').disabled = false; }
+}).catch(()=>{});
+</script>
+</body>
+</html>

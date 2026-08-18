@@ -30,9 +30,27 @@ your PATH: `pbi-lineage` and `bimigrate`.
 pytest -q
 ```
 
-Expected: **183 passed**. If that passes, everything is wired correctly.
+Expected: **195 passed**. If that passes, everything is wired correctly.
 
-## 3. Run the lineage analyzer
+## 3. Web UI (sabse aasan tareeka)
+
+```bash
+pip install -e ".[web]"
+pbi-lineage ui                     # browser apne aap khulega: http://127.0.0.1:8777
+```
+
+File ka path daaliye (`.pbix` ya `.pbip` project folder) aur **Analyze** dabaiye. Aapko milega:
+
+- **Execution summary + log** — kitne unused columns/measures, relationships, findings
+- **Objects** — har object ka status (Used / Unused / Indeterminate …) aur *kyun* (evidence ke saath)
+- **Dependency tree** — kisi bhi column par click karke poori lineage: column → measure → visual → page → report
+- **M expressions** — saara Power Query code, upstream source ke saath
+- **Best practices** — rule findings
+- **Removal preview** — unused objects tick karke TMSL delete script; jo safe nahi hai woh BLOCKED
+
+Sab kuch aapki machine par chalta hai — koi data bahar nahi jaata.
+
+## 4. Run the lineage analyzer (CLI)
 
 ```bash
 # analyze a Power BI file (.pbix, .pbip, or a PBIP project folder)
@@ -108,7 +126,7 @@ You should see `Sales[DiscountCode]` reported as **Unused** while `Qty` and
 `Region` stay **Used** — `Qty` because the `Total Sales` measure consumes
 it, `Region` because a visual projects it.
 
-## 4. Run the migration tool + web UI (optional)
+## 5. Run the migration tool (optional)
 
 ```bash
 pip install -e ".[web]"
