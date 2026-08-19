@@ -31,6 +31,7 @@ from pbi_lineage.graph import (
     ALL_MEASURES,
     DependencyGraph,
     Node,
+    describe_consumer,
     nid_calc_item,
     nid_column,
     nid_expression,
@@ -378,10 +379,50 @@ _SCOPE_EDGE_KIND = {
 }
 
 
+# Power BI generates one of these per date column, hidden, with the same
+# Month/Quarter/Year column names in every one.
+_AUTO_DATE_PREFIXES = ("LocalDateTable_", "DateTableTemplate_", "NewLocalDateTable_")
+
+
 def _hosts_of(model: Model, predicate) -> list[str]:
     """Which tables hold an object matching `predicate` — the basis for
-    resolving a reference that names no table."""
-    return [table.name for table in model.tables if predicate(table)]
+    resolving a reference that names no table.
+
+    Auto date/time tables are excluded first. A model with four date
+    columns has four hidden tables each carrying `Month`, so an unqualified
+    `Month` in a bookmark would look ambiguous and go unresolved — while
+    the thing the author actually named, their own Calendar[Month], sits
+    right there. They are only considered when nothing else matches.
+    """
+    hosts = [table.name for table in model.tables if predicate(table)]
+    authored = [name for name in hosts if not name.startswith(_AUTO_DATE_PREFIXES)]
+    return authored or hosts
+
+
+def _usage_reasons(graph: DependencyGraph, node_id: str, protected: list[str]) -> list[str]:
+    """Why this object counts as used, named the way a person would say it.
+
+    The direct consumers are most of the answer: a column is used because
+    *this visual on that page* shows it. A generic "reachable from a root"
+    is true and useless — it is the sentence that makes a page of verdicts
+    feel like it is withholding its reasoning.
+
+    A protection reason comes first and is never dropped. "Kept because it
+    is a sortByColumn target" is not visible in any in-edge, and it is
+    exactly the reason someone needs before they consider deleting the
+    thing.
+    """
+    seen: list[str] = list(dict.fromkeys(protected))
+    for edge in graph.in_edges(node_id):
+        sentence = describe_consumer(graph, edge)
+        if sentence not in seen:
+            seen.append(sentence)
+        if len(seen) >= 6:
+            break
+    if not seen:
+        root = graph.roots.get(node_id)
+        return [root] if root else ["reachable from a report, RLS or relationship root"]
+    return seen
 
 
 def _resolve_field_reference(model: Model, ref: FieldReference, rl_index: dict[str, str]) -> str | None:
@@ -414,27 +455,56 @@ def _resolve_field_reference(model: Model, ref: FieldReference, rl_index: dict[s
                     return nid_column(table.name, ref.name)
                 if any(m.name == ref.name for m in table.measures):
                     return nid_measure(ref.name)  # filters sometimes carry measures as Column
+                if ref.name in rl_index:
+                    return rl_index[ref.name]
+                return None  # the table exists and does not hold it: genuinely broken
             if ref.name in rl_index:
                 return rl_index[ref.name]
-            return None
-        # unqualified: a measure name is unique model-wide, so try that first
-        for t in model.tables:
-            if any(m.name == ref.name for m in t.measures):
-                return nid_measure(ref.name)
-        if ref.name in rl_index:
-            return rl_index[ref.name]
-        hosts = _hosts_of(model, lambda t: any(c.name == ref.name for c in t.columns))
-        return nid_column(hosts[0], ref.name) if len(hosts) == 1 else None
+            # The named table is not in the model at all. That happens for a
+            # measure written as `[% Return Rate]` with the *measure's own*
+            # name repeated as the table, so fall through and resolve the
+            # object by name rather than calling the whole thing broken.
+        return _resolve_unqualified(model, ref.name, rl_index)
 
     if ref.kind == RefKind.HIERARCHY_LEVEL:
-        hierarchy_name = ref.name.split(".", 1)[0]
-        if ref.table:
-            table = model.table(ref.table)
-            if table is not None and any(h.name == hierarchy_name for h in table.hierarchies):
-                return nid_hierarchy(ref.table, hierarchy_name)
+        return _resolve_hierarchy(model, ref.table, ref.name)
+    return None
+
+
+def _resolve_unqualified(model: Model, name: str, rl_index: dict[str, str]) -> str | None:
+    """An object named without a usable table: resolve it if exactly one
+    thing in the model answers to that name."""
+    for table in model.tables:
+        if any(measure.name == name for measure in table.measures):
+            return nid_measure(name)  # measure names are unique model-wide
+    if name in rl_index:
+        return rl_index[name]
+    hosts = _hosts_of(model, lambda t: any(c.name == name for c in t.columns))
+    if len(hosts) == 1:
+        return nid_column(hosts[0], name)
+    if name in hosts:
+        # `Product` with a `Product` table that has a `Product` column: the
+        # convention every model follows is that the bare name means that
+        # table's own column, not a same-named column on some other table.
+        return nid_column(name, name)
+    if "." in name:
+        # `Date Hierarchy.Month` arrives typed as a column often enough that
+        # refusing to look at hierarchies here would lose real usage.
+        return _resolve_hierarchy(model, None, name)
+    return None
+
+
+def _resolve_hierarchy(model: Model, table_name: str | None, name: str) -> str | None:
+    hierarchy_name = name.split(".", 1)[0]
+    if table_name:
+        table = model.table(table_name)
+        if table is not None:
+            if any(h.name == hierarchy_name for h in table.hierarchies):
+                return nid_hierarchy(table_name, hierarchy_name)
             return None
-        hosts = _hosts_of(model, lambda t: any(h.name == hierarchy_name for h in t.hierarchies))
-        return nid_hierarchy(hosts[0], hierarchy_name) if len(hosts) == 1 else None
+    hosts = _hosts_of(model, lambda t: any(h.name == hierarchy_name for h in t.hierarchies))
+    if len(hosts) == 1:
+        return nid_hierarchy(hosts[0], hierarchy_name)
     return None
 
 
@@ -475,7 +545,11 @@ def _add_report_edges(
                         "visual",
                         visual.visual_type or "visual",
                         parent=page_id,
-                        meta={"is_hidden": visual.is_hidden, "visual_type": visual.visual_type},
+                        meta={
+                            "is_hidden": visual.is_hidden,
+                            "visual_type": visual.visual_type,
+                            "title": visual.title,
+                        },
                     )
                 )
                 graph.add_edge(page_id, visual_id, "defines", "declared", "visual on page")
@@ -494,10 +568,49 @@ def _wire_ref(
     result: AnalysisResult,
 ) -> None:
     target = _resolve_field_reference(model, ref, rl_index)
-    if target is None:
+    if target is not None:
+        graph.add_edge(
+            source_id, target, _SCOPE_EDGE_KIND.get(ref.scope, "projects"), "parsed", ref.evidence
+        )
+        return
+
+    # A `Date Hierarchy.Month` with no table names a hierarchy that Power BI
+    # generated once per date column, so several identical candidates exist
+    # and none of them is the one the author wrote. Marking every candidate
+    # used is the conservative reading — it can never produce a false
+    # `Unused`, and the evidence says the reference did not say which.
+    candidates = _auto_date_candidates(model, ref)
+    if not candidates:
         result.unresolved.append(ref)
         return
-    graph.add_edge(source_id, target, _SCOPE_EDGE_KIND.get(ref.scope, "projects"), "parsed", ref.evidence)
+    for candidate in candidates:
+        graph.add_edge(
+            source_id,
+            candidate,
+            _SCOPE_EDGE_KIND.get(ref.scope, "projects"),
+            "declared",
+            f"{ref.evidence} — names no table; matched every auto date/time table that has it",
+        )
+
+
+def _auto_date_candidates(model: Model, ref: FieldReference) -> list[str]:
+    """Auto date/time hierarchies matching an unqualified reference.
+
+    Empty unless *every* candidate is auto-generated: where the author's own
+    table is in the running, an ambiguous reference is still ambiguous and
+    must not be resolved by preferring one.
+    """
+    if ref.table:
+        return []
+    hierarchy_name = ref.name.split(".", 1)[0] if "." in ref.name else ref.name
+    hosts = [
+        table.name
+        for table in model.tables
+        if any(h.name == hierarchy_name for h in table.hierarchies)
+    ]
+    if len(hosts) < 2 or not all(name.startswith(_AUTO_DATE_PREFIXES) for name in hosts):
+        return []
+    return [nid_hierarchy(name, hierarchy_name) for name in hosts]
 
 
 # ---------------------------------------------------------------------------
@@ -518,34 +631,34 @@ def _protected_reasons(model: Model) -> dict[str, list[str]]:
             (relationship.to_table, relationship.to_column),
         ):
             if table and column:
-                add(nid_column(table, column), f"relationship {relationship.name}")
+                add(nid_column(table, column), f'joined by the relationship “{relationship.name}”')
     for table in model.tables:
         if table.calculation_group is not None:
-            add(nid_table(table.name), "calculation group table")
+            add(nid_table(table.name), "kept as a calculation group table")
             for item in table.calculation_group.items:
-                add(nid_calc_item(table.name, item.name), "calculation group item")
+                add(nid_calc_item(table.name, item.name), "kept as a calculation group item")
         for column in table.columns:
             if column.sort_by_column:
-                add(nid_column(table.name, column.sort_by_column), f"sortByColumn target of {column.name}")
+                add(nid_column(table.name, column.sort_by_column), f'kept as the sortByColumn target of “{column.name}”')
             if column.is_key:
-                add(nid_column(table.name, column.name), "key column")
+                add(nid_column(table.name, column.name), "kept as the table's key column")
         for hierarchy in table.hierarchies:
             for level in hierarchy.levels:
                 if level.column:
-                    add(nid_column(table.name, level.column), f"level of hierarchy {hierarchy.name}")
+                    add(nid_column(table.name, level.column), f'a level of the hierarchy “{hierarchy.name}”')
         for partition in table.partitions:
             expression = partition.expression or ""
             if "RangeStart" in expression or "RangeEnd" in expression:
-                add(nid_table(table.name), "incremental refresh policy partition")
+                add(nid_table(table.name), "kept by an incremental refresh policy partition")
     for role in model.roles:
         for table_name, filter_dax in role.table_permissions.items():
             analysis = dax.analyze(filter_dax)
             resolution = dax.resolve_refs(analysis, model, host_table=table_name)
             for ref in resolution.refs:
                 if ref.kind == "column":
-                    add(nid_column(ref.table, ref.name), f"RLS filter of role {role.name}")
+                    add(nid_column(ref.table, ref.name), f'used by the RLS filter of role “{role.name}”')
                 elif ref.kind == "measure":
-                    add(nid_measure(ref.name), f"RLS filter of role {role.name}")
+                    add(nid_measure(ref.name), f'used by the RLS filter of role “{role.name}”')
     return protected
 
 
@@ -600,7 +713,7 @@ def analyze_model(
                 name,
                 STATUS_USED,
                 is_hidden,
-                reasons=[graph.roots.get(node_id, "reachable from report/RLS/relationship root")],
+                reasons=_usage_reasons(graph, node_id, protected.get(node_id, [])),
                 evidence=[e.evidence for e in edges][:8],
             )
         if node_id in protected:

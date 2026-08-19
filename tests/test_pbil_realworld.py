@@ -325,3 +325,161 @@ def test_a_partition_that_already_holds_real_m_is_not_overwritten():
     )
     _merge_m_section(model, SECTION, [])
     assert model.tables[0].partitions[0].expression == real
+
+
+# ---------------------------------------------------------------------------
+# Reference resolution and the "why is this used" sentence
+# ---------------------------------------------------------------------------
+
+from pbi_lineage.graph import describe_consumer, nid_hierarchy  # noqa: E402
+from pbi_lineage.resolve import STATUS_UNUSED, STATUS_USED, analyze_model  # noqa: E402
+from pbi_lineage.schema import (  # noqa: E402
+    Column,
+    FieldReference,
+    Hierarchy,
+    HierarchyLevel,
+    Measure,
+    Model,
+    Page,
+    RefKind,
+    ReportLayout,
+    Table,
+    Visual,
+)
+
+
+def _ref(name, *, table=None, kind=RefKind.COLUMN, scope="visual:projection"):
+    return FieldReference(table=table, name=name, kind=kind, scope=scope, evidence="sections[0]…")
+
+
+def _report(refs, *, title=None, visual_type="barChart", page="Overview"):
+    return ReportLayout(
+        name="Rep",
+        pages=[Page(name=page, visuals=[Visual(name="v1", visual_type=visual_type, title=title, references=refs)])],
+    )
+
+
+def test_an_unqualified_measure_reference_still_counts_as_usage():
+    """Report filters carry measures with no table. Dropping them made the
+    columns behind the measure read as unused."""
+    model = Model(
+        name="M",
+        tables=[
+            Table(
+                name="Sales",
+                columns=[Column(name="Qty")],
+                measures=[Measure(name="Total", expression="SUM(Sales[Qty])")],
+            )
+        ],
+    )
+    result = analyze_model(model, [_report([_ref("Total")])])
+    assert result.verdicts["measure:Total"].status == STATUS_USED
+    assert result.verdicts[nid_column("Sales", "Qty")].status == STATUS_USED
+    assert not result.unresolved
+
+
+def test_an_unqualified_column_is_resolved_only_when_it_is_unambiguous():
+    model = Model(
+        name="M",
+        tables=[
+            Table(name="A", columns=[Column(name="Shared"), Column(name="OnlyHere")]),
+            Table(name="B", columns=[Column(name="Shared")]),
+        ],
+    )
+    result = analyze_model(model, [_report([_ref("OnlyHere"), _ref("Shared")])])
+    assert result.verdicts[nid_column("A", "OnlyHere")].status == STATUS_USED
+    assert result.verdicts[nid_column("A", "Shared")].status == STATUS_UNUSED
+    assert [r.name for r in result.unresolved] == ["Shared"], "ambiguity is not evidence for either"
+
+
+def test_an_unqualified_name_matching_a_table_prefers_that_table():
+    model = Model(
+        name="M",
+        tables=[
+            Table(name="Product", columns=[Column(name="Product")]),
+            Table(name="Customer", columns=[Column(name="Product")]),
+        ],
+    )
+    result = analyze_model(model, [_report([_ref("Product")])])
+    assert result.verdicts[nid_column("Product", "Product")].status == STATUS_USED
+    assert result.verdicts[nid_column("Customer", "Product")].status == STATUS_UNUSED
+
+
+def test_hidden_auto_date_tables_do_not_make_a_name_ambiguous():
+    """A model with date columns carries a hidden LocalDateTable per date,
+    each with the same column names. Letting those compete would leave the
+    author's own column unresolved."""
+    model = Model(
+        name="M",
+        tables=[
+            Table(name="Calendar", columns=[Column(name="Month")]),
+            Table(name="LocalDateTable_abc", columns=[Column(name="Month")]),
+            Table(name="LocalDateTable_def", columns=[Column(name="Month")]),
+        ],
+    )
+    result = analyze_model(model, [_report([_ref("Month")])])
+    assert result.verdicts[nid_column("Calendar", "Month")].status == STATUS_USED
+
+
+def test_an_auto_date_hierarchy_reference_marks_every_candidate():
+    """`Date Hierarchy.Month` names no table and every candidate is
+    generated. Marking them all is the conservative reading; it can never
+    produce a false Unused, and the evidence says the reference did not say
+    which."""
+    levels = [HierarchyLevel(name="Month", column="Month")]
+    model = Model(
+        name="M",
+        tables=[
+            Table(
+                name=f"LocalDateTable_{suffix}",
+                columns=[Column(name="Month")],
+                hierarchies=[Hierarchy(name="Date Hierarchy", levels=levels)],
+            )
+            for suffix in ("abc", "def")
+        ],
+    )
+    result = analyze_model(model, [_report([_ref("Date Hierarchy.Month", kind=RefKind.HIERARCHY_LEVEL)])])
+    for suffix in ("abc", "def"):
+        assert result.verdicts[nid_hierarchy(f"LocalDateTable_{suffix}", "Date Hierarchy")].status == STATUS_USED
+    assert not result.unresolved
+    evidence = result.graph.in_edges(nid_hierarchy("LocalDateTable_abc", "Date Hierarchy"))[0].evidence
+    assert "names no table" in evidence
+
+
+def test_a_reference_to_a_table_that_exists_and_lacks_it_is_still_broken():
+    model = Model(name="M", tables=[Table(name="Sales", columns=[Column(name="Date")])])
+    result = analyze_model(model, [_report([_ref("Dates", table="Sales")])])
+    assert [r.name for r in result.unresolved] == ["Dates"]
+
+
+def test_why_a_column_is_used_names_the_visual_and_page_not_a_json_path():
+    model = Model(name="M", tables=[Table(name="Sales", columns=[Column(name="Qty")])])
+    report = _report([_ref("Qty", table="Sales")], title="Sales by month", visual_type="barChart")
+    verdict = analyze_model(model, [report]).verdicts[nid_column("Sales", "Qty")]
+    assert verdict.reasons[0] == 'shown in the barChart “Sales by month” on page “Overview”'
+    assert verdict.evidence, "the raw location is still recorded as evidence"
+
+
+def test_a_visual_with_no_typed_title_is_named_by_its_type():
+    model = Model(name="M", tables=[Table(name="Sales", columns=[Column(name="Qty")])])
+    verdict = analyze_model(model, [_report([_ref("Qty", table="Sales")])]).verdicts[nid_column("Sales", "Qty")]
+    assert verdict.reasons[0] == "shown in the barChart on page “Overview”"
+
+
+def test_a_protection_reason_is_never_dropped_for_a_consumer_sentence():
+    """"Kept because it is a sortByColumn target" appears in no in-edge, and
+    it is exactly what someone needs before deleting the thing."""
+    model = Model(
+        name="M",
+        tables=[
+            Table(
+                name="Sales",
+                columns=[Column(name="Month", sort_by_column="MonthNo"), Column(name="MonthNo")],
+            )
+        ],
+    )
+    verdict = analyze_model(model, [_report([_ref("MonthNo", table="Sales")])]).verdicts[
+        nid_column("Sales", "MonthNo")
+    ]
+    assert "sortByColumn" in verdict.reasons[0]
+    assert any("shown in" in reason for reason in verdict.reasons)

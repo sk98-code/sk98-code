@@ -155,6 +155,7 @@ def _parse_visual_container(container: dict, path: str, warnings: list[str]) -> 
     return Visual(
         name=str(config.get("name", "")),
         visual_type=single.get("visualType"),
+        title=_literal_title(single),
         x=container.get("x"),
         y=container.get("y"),
         width=container.get("width"),
@@ -163,6 +164,22 @@ def _parse_visual_container(container: dict, path: str, warnings: list[str]) -> 
         sync_group=sync_group.get("groupName"),
         references=dedupe(refs),
     )
+
+
+def _literal_title(single: dict) -> str | None:
+    """The visual's typed-in title, if it has one.
+
+    "shown in the card “Total sales this year”" tells a reader where to
+    look; "shown in the card1652434605854" does not. Only a literal counts
+    — a title bound to an expression is not a name we can quote.
+    """
+    entries = ((single.get("vcObjects") or {}).get("title") or [])
+    for entry in entries:
+        expression = ((entry.get("properties") or {}).get("text") or {}).get("expr") or {}
+        value = (expression.get("Literal") or {}).get("Value")
+        if isinstance(value, str) and value.strip():
+            return value.strip().strip("'").strip() or None
+    return None
 
 
 def _parse_filters(raw: Any, *, scope: str, path: str) -> list[FieldReference]:

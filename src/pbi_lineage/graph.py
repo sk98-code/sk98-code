@@ -63,6 +63,62 @@ def nid_expression(name: str) -> str:
     return f"expression:{name}"
 
 
+# What each edge kind means when read out loud, for the "why is this used"
+# line. A JSON path is evidence; it is not an answer to that question.
+CONSUMER_VERBS = {
+    "projects": "shown in",
+    "filters": "filtered by",
+    "sorts": "sorted by",
+    "formats": "used for conditional formatting in",
+    "relates": "joined by",
+    "defines": "defined by",
+    "wildcard": "referenced dynamically by",
+}
+
+
+def describe_consumer(graph: "DependencyGraph", edge: "Edge") -> str:
+    """One human sentence for one edge: who consumes this, and where.
+
+    The raw evidence path stays on the verdict — the spec requires it — but
+    a reader asking "why is this column used" needs the name of the visual
+    and the page it sits on, not `sections[5].visualContainers[0].config…`.
+    """
+    consumer = graph.nodes.get(edge.source)
+    if consumer is None:
+        return edge.evidence
+    verb = CONSUMER_VERBS.get(edge.kind, "used by")
+    # With one report open, repeating its name on every line is noise; with
+    # several, leaving it off makes the lines ambiguous.
+    many_reports = sum(1 for node in graph.nodes.values() if node.kind == "report") > 1
+    if consumer.kind == "visual":
+        page = graph.nodes.get(consumer.parent) if consumer.parent else None
+        report = graph.nodes.get(page.parent) if page is not None and page.parent else None
+        kind_name = consumer.meta.get("visual_type") or "visual"
+        title = consumer.meta.get("title")
+        what = f"{kind_name} “{title}”" if title else kind_name
+        where = f" on page “{page.name}”" if page is not None else ""
+        which = f" of {report.name}" if report is not None and many_reports else ""
+        return f"{verb} the {what}{where}{which}"
+    if consumer.kind == "page":
+        report = graph.nodes.get(consumer.parent) if consumer.parent else None
+        which = f" of {report.name}" if report is not None and many_reports else ""
+        return f"{verb} a page-level filter on “{consumer.name}”{which}"
+    if consumer.kind == "report":
+        return f"{verb} a report-level filter" + (f" on {consumer.name}" if many_reports else "")
+    label = {
+        "measure": "measure",
+        "column": "calculated column",
+        "table": "calculated table",
+        "relationship": "relationship",
+        "role": "RLS role",
+        "hierarchy": "hierarchy",
+        "calc_item": "calculation item",
+        "partition": "partition",
+        "expression": "shared expression",
+    }.get(consumer.kind, consumer.kind)
+    return f"{verb} the {label} “{consumer.name}”"
+
+
 ALL_MEASURES = "measures:*"  # wildcard target for SELECTEDMEASURE() edges
 
 

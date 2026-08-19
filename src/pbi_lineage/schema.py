@@ -194,6 +194,10 @@ class CalcDependency:
 class Visual:
     name: str  # stable id from the report file
     visual_type: str | None = None
+    # The title the report author typed, when it is a literal. A dynamic
+    # title is an expression, not a name, so it is left out rather than
+    # rendered as DAX in a sentence.
+    title: str | None = None
     x: float | None = None
     y: float | None = None
     width: float | None = None

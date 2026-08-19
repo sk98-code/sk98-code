@@ -28,6 +28,10 @@
     }
   }
   *{box-sizing:border-box}
+  /* `hidden` is only display:none in the UA stylesheet, so any explicit
+     display rule beats it — `.wrap{display:grid}` was showing a panel the
+     markup had hidden. */
+  [hidden]{display:none !important}
   body{margin:0;font:14px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
   code,pre,.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
 
@@ -94,7 +98,13 @@
   .s-extern{background:var(--extern-bg);color:var(--extern)}
   .kind{color:var(--muted);font-size:12px}
   .muted{color:var(--muted)}
-  .why{font-size:12px;color:var(--muted);margin-top:2px;word-break:break-word}
+  .why{font-size:12px;color:var(--ink);word-break:break-word;line-height:1.5}
+  .why > div{margin-bottom:1px}
+  .evtoggle{display:inline-block;margin-top:3px;font-size:11px;color:var(--accent);cursor:pointer;
+    border-bottom:1px dotted var(--accent)}
+  .evtoggle.on{border-bottom-style:solid}
+  .evlist{margin-top:3px}
+  .evlist .ev{font-size:11px;color:var(--muted);word-break:break-all;padding:1px 0}
 
   /* tree */
   .tree{font-size:13px;padding:10px 12px}
@@ -742,12 +752,32 @@ async function loadObjects(){
     tr.appendChild(el('td','muted', r.table||''));
     tr.appendChild(el('td','kind', r.kind + (r.hidden?' · hidden':'')));
     const tdS = el('td'); tdS.appendChild(el('span','pill '+statusClass(r.status), r.status)); tr.appendChild(tdS);
-    const why = [...(r.reasons||[]), ...(r.evidence||[])].slice(0,2).join(' · ');
-    tr.appendChild(el('td','why', why));
+    tr.appendChild(whyCell(r));
 
     tr.addEventListener('click', () => showTree(r.id, r.name));
     tb.appendChild(tr);
   });
+}
+
+/* The reasons answer "why is this used"; the JSON paths are the evidence
+   for that answer. Showing them at the same weight was what made the table
+   read as a dump — the answer got lost among the paths that support it. */
+function whyCell(r){
+  const td = el('td','why');
+  const reasons = r.reasons || [], evidence = r.evidence || [];
+  reasons.slice(0, 3).forEach(reason => td.appendChild(el('div', null, reason)));
+  if(reasons.length > 3)
+    td.appendChild(el('div','muted', `+${reasons.length - 3} more`));
+  if(evidence.length){
+    const toggle = el('span','evtoggle', `${evidence.length} reference${evidence.length>1?'s':''} in the file`);
+    const list = el('div','evlist');
+    list.hidden = true;
+    evidence.forEach(e => list.appendChild(el('div','ev mono', e)));
+    toggle.addEventListener('click', ev => { ev.stopPropagation(); list.hidden = !list.hidden;
+      toggle.classList.toggle('on', !list.hidden); });
+    td.appendChild(toggle); td.appendChild(list);
+  }
+  return td;
 }
 
 function updateSel(){
