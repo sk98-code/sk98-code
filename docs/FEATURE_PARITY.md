@@ -37,14 +37,31 @@ fourth in development. Mapped to this repo:
 | Column — model to visual | Where-used detail | **Objects + Dependency tree** |
 | Column — source to visual, end to end | *coming Sep 2026* | **Source → Visual tab**, shipped |
 
-The last row needs a caveat rather than a victory lap: our upstream half
-resolves the *source object* a table loads from (server/database/schema
-object, or the file), so the chain is unbroken source → column → visual —
-but it is **table/view grain upstream**, not column grain. Following a
-specific warehouse *column* through M renames, merges, pivots and custom
-columns needs a full M evaluator, which the build spec scopes out as a
-separate project. That is presumably the harder half they are still
-building.
+The last row is now **column grain upstream**, not just table/view grain.
+`mtrace.py` walks each partition's M step-by-step and carries an open set of
+columns forward through navigation, `Value.NativeQuery` (including SQL
+`SELECT a AS b` aliases), `Table.RenameColumns`, `Table.SelectColumns` /
+`RemoveColumns`, `Table.AddColumn` (recorded as *computed from* its inputs)
+and `Table.ExpandTableColumn`. The **Column Lineage** tab renders the full
+chain — server → database → schema → table → source column → semantic model
+→ model column → measure / visual / relationship.
+
+The honest limits, and they matter:
+
+- Steps that reshape the row *and* column space — `Table.Pivot`,
+  `Table.Unpivot`, `Table.Group`, joins that are never expanded — are
+  reported as **untraced** for the columns they touch. The tracer says
+  "I lost it here, at this step", it never guesses a mapping.
+- `SELECT *` in native SQL is not expanded, because the tool has no
+  connection to the warehouse to enumerate the columns.
+- Custom PQ functions are traced when they are invoked in a step whose
+  column effect is visible; a function whose body the tool cannot see is
+  reported as untraced rather than assumed pass-through.
+- Sources that are *other semantic models* (`AnalysisServices.Database`,
+  `PowerBI.Datamarts`, DirectQuery on a published model) are labelled as
+  the upstream source and their tables/columns are shown, but the tracer
+  does not yet recurse **into** that model's own partitions to reach its
+  warehouse. That recursion is the remaining gap on this row.
 
 | Feature | Status | Notes |
 |---|---|---|
@@ -54,8 +71,8 @@ building.
 | Cross-report lineage | **Yes** | Usage is the union across every parsed report |
 | End-to-end lineage (source → report) | **Yes** | `lineage.py`, "Source → Visual" tab |
 | Export the lineage graph as JSON | **Yes** | `/api/lineage/items` and the JSON export |
-| Column-level lineage — data source to visual | **Partial** | Chain is unbroken, but upstream resolution is table/view grain — see the note above |
-| Downstream / composite model tracking | **Partial** | Tracked as a consumer; field-level recursion not implemented |
+| Column-level lineage — data source to visual | **Yes** (with limits) | Column-grain M tracing, **Column Lineage** tab; joins/pivots/opaque functions reported as *untraced*, never guessed — see the note above |
+| Downstream / composite model tracking | **Partial** | Tracked as a consumer and shown as an upstream source; the tracer does not recurse into the other model's own partitions |
 
 ## Detection & analysis
 

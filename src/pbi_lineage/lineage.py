@@ -407,3 +407,236 @@ def tenant_item_lineage(scan: dict, consumer_index: dict | None = None) -> dict:
         "data_sources": sorted(source_rows.values(), key=lambda r: -r["model_count"]),
         "models": sorted(models, key=lambda m: (m["workspace"], m["model"])),
     }
+
+
+# ---------------------------------------------------------------------------
+# Column lineage tree: server → database → schema → table → column →
+# semantic model → model column → relationship / visual / filter
+# ---------------------------------------------------------------------------
+
+
+_SYSTEM_LABELS = {
+    "Sql.Database": "SQL Server",
+    "PostgreSQL.Database": "PostgreSQL",
+    "Oracle.Database": "Oracle",
+    "MySQL.Database": "MySQL",
+    "Snowflake.Databases": "Snowflake",
+    "AmazonRedshift.Database": "Amazon Redshift",
+    "GoogleBigQuery.Database": "BigQuery",
+    "Databricks.Catalogs": "Databricks",
+    "Databricks.Query": "Databricks",
+    "Lakehouse.Contents": "Lakehouse",
+    "Fabric.Warehouse": "Fabric Warehouse",
+    "Excel.Workbook": "Excel",
+    "Csv.Document": "CSV",
+    "Odbc.DataSource": "ODBC",
+    "Odbc.Query": "ODBC",
+    "Web.Contents": "Web",
+    "PowerPlatform.Dataflows": "Dataflow",
+    "Dataflows.Contents": "Dataflow",
+    "PowerBI.Datamarts": "Power BI Datamart",
+}
+
+
+def _system_label(function: str | None) -> str:
+    return _SYSTEM_LABELS.get(function or "", (function or "Source").split(".")[0])
+
+
+def _node(name: str, kind: str, source: str = "", status: str = "", **extra) -> dict:
+    node = {"name": name, "type": kind, "source": source, "status": status, "children": []}
+    node.update(extra)
+    return node
+
+
+def column_lineage_tree(model: Model, analysis: AnalysisResult, index: MExpressionIndex) -> list[dict]:
+    """The full drill-down, shaped for a four-column tree view.
+
+    Rows carry Name / Type / Source / Status, exactly as a lineage grid
+    reads: the Source column names the *parent* item, so a reader can see
+    the containment without following indentation alone.
+    """
+    from pbi_lineage.mtrace import trace_model  # noqa: PLC0415 — keeps the import graph flat
+
+    traces = trace_model(model, index)
+    graph = analysis.graph
+
+    # source-column -> the model columns derived from it
+    derived: dict[tuple[str, str, str], list[tuple[str, str]]] = {}
+    unresolved: list[tuple[str, str, str]] = []
+    for table_name, trace in traces.items():
+        for column_name, origin in trace.columns.items():
+            if origin.source_column and origin.source_table:
+                key = (trace.source_table or "", origin.source_column, origin.derivation)
+                derived.setdefault(key[:2] + ("",), []).append((table_name, column_name))
+            else:
+                unresolved.append((table_name, column_name, origin.derivation))
+
+    # group the model's sources into server → database → schema → table
+    roots: dict[str, dict] = {}
+    for table in model.tables:
+        trace = traces.get(table.name)
+        for ref in sources_for_table(index, table.name):
+            system = _system_label(ref.system)
+            server = ref.server or system
+            root = roots.setdefault(server, _node(server, f"{system} Server", "", "", key=f"server:{server}"))
+            database = ref.database or ""
+            db_node = _find_or_add(root, database or system, f"{system} Database", f"{server} (Server)")
+            schema = (trace.source_schema if trace else None) or ""
+            parent = db_node
+            if schema:
+                parent = _find_or_add(db_node, schema, f"{system} Schema", f"{database or system} (Database)")
+            table_label = (trace.source_table if trace else None) or ref.label
+            table_label = table_label.split(".")[-1]
+            table_node = _find_or_add(
+                parent,
+                table_label,
+                f"{system} Table",
+                f"{schema or database or system} ({'Schema' if schema else 'Database'})",
+            )
+            _fill_source_columns(table_node, table, trace, traces, model, analysis, graph, system)
+    return list(roots.values())
+
+
+def _single_input(detail: str) -> str | None:
+    """The one column a `computed from X` detail names, if it names exactly one."""
+    marker = "computed from "
+    if not detail.startswith(marker):
+        return None
+    inputs = [part.strip() for part in detail[len(marker) :].split(",") if part.strip()]
+    return inputs[0] if len(inputs) == 1 else None
+
+
+def _find_or_add(parent: dict, name: str, kind: str, source: str) -> dict:
+    for child in parent["children"]:
+        if child["name"] == name and child["type"] == kind:
+            return child
+    child = _node(name, kind, source)
+    parent["children"].append(child)
+    return child
+
+
+def _fill_source_columns(table_node, table, trace, traces, model, analysis, graph, system) -> None:
+    """Under a source table: one row per source column, then the semantic
+    model and the model columns derived from it, then their consumers."""
+    if trace is None:
+        return
+    by_source: dict[str, list[tuple[str, str]]] = {}
+    for column_name, origin in trace.columns.items():
+        if origin.source_column:
+            by_source.setdefault(origin.source_column, []).append((table.name, column_name))
+
+    # A computed column belongs under the column it was computed *from*,
+    # not in the untraced bucket — that nesting is the derivation chain a
+    # reader follows ("GrossAmount -> AdjustedRiskAmount").
+    computed_under: dict[str, list[tuple[str, str]]] = {}
+    for column_name, origin in trace.columns.items():
+        if origin.source_column or origin.derivation != "computed":
+            continue
+        parent_column = _single_input(origin.detail)
+        parent_origin = trace.columns.get(parent_column) if parent_column else None
+        if parent_origin is not None and parent_origin.source_column:
+            computed_under.setdefault(parent_origin.source_column, []).append((table.name, column_name))
+
+    for source_column, members in sorted(by_source.items()):
+        column_node = _find_or_add(
+            table_node, source_column, f"{system} column", f"{table_node['name']} (Table)"
+        )
+        model_node = _find_or_add(column_node, model.name, "Semantic Model", "")
+        for table_name, model_column in members:
+            origin = traces[table_name].columns[model_column]
+            node_id = nid_column(table_name, model_column)
+            verdict = analysis.verdicts.get(node_id)
+            status = verdict.status if verdict else ""
+            child = _node(
+                model_column,
+                "Model column",
+                f"{table_name} (Table)",
+                status,
+                key=node_id,
+                derivation=origin.derivation,
+                detail=origin.detail,
+            )
+            _fill_consumers(child, node_id, graph)
+            for derived_table, derived_column in computed_under.get(source_column, []):
+                derived_origin = traces[derived_table].columns[derived_column]
+                derived_id = nid_column(derived_table, derived_column)
+                derived_verdict = analysis.verdicts.get(derived_id)
+                grandchild = _node(
+                    derived_column,
+                    "Model column",
+                    f"{derived_table} (Table)",
+                    derived_verdict.status if derived_verdict else "",
+                    key=derived_id,
+                    derivation=derived_origin.derivation,
+                    detail=derived_origin.detail,
+                )
+                _fill_consumers(grandchild, derived_id, graph)
+                child["children"].append(grandchild)
+            model_node["children"].append(child)
+
+    # columns whose origin could not be traced still belong in the tree —
+    # hiding them would quietly overstate coverage
+    nested = {column for members in computed_under.values() for _, column in members}
+    untraced = [
+        (name, origin)
+        for name, origin in trace.columns.items()
+        if not origin.source_column and name not in nested
+    ]
+    if untraced:
+        bucket = _find_or_add(table_node, "(origin not traced)", "Unmapped", f"{table_node['name']} (Table)")
+        model_node = _find_or_add(bucket, model.name, "Semantic Model", "")
+        for name, origin in sorted(untraced):
+            node_id = nid_column(table.name, name)
+            verdict = analysis.verdicts.get(node_id)
+            child = _node(
+                name,
+                "Model column",
+                f"{table.name} (Table)",
+                verdict.status if verdict else "",
+                key=node_id,
+                derivation=origin.derivation,
+                detail=origin.detail,
+            )
+            _fill_consumers(child, node_id, graph)
+            model_node["children"].append(child)
+
+
+_CONSUMER_LABELS = {
+    "projects": "Used in visual",
+    "filters": "Used in visual level filter",
+    "sorts": "Used as sort",
+    "formats": "Used in conditional formatting",
+    "relates": "Used in relationship",
+    "defines": "Used in calculation",
+    "wildcard": "Dynamic reference",
+}
+
+
+def _fill_consumers(node: dict, node_id: str, graph) -> None:
+    """Everything that consumes this model column, labelled by edge kind —
+    the 'Used in visual / relationship / filter' rows."""
+    seen: set[tuple[str, str]] = set()
+    for edge in graph.in_edges(node_id):
+        consumer = graph.nodes.get(edge.source)
+        if consumer is None:
+            continue
+        label = _CONSUMER_LABELS.get(edge.kind, "Used by")
+        if consumer.kind == "measure":
+            child = _node(consumer.name, "Model measure", f"used by {edge.kind}", "")
+            _fill_consumers(child, edge.source, graph)
+        elif consumer.kind == "visual":
+            page = graph.nodes.get(consumer.parent) if consumer.parent else None
+            child = _node(consumer.name, label, page.name if page else "", "")
+        elif consumer.kind == "relationship":
+            child = _node(consumer.name, "Used in relationship", edge.evidence, "")
+        elif consumer.kind == "role":
+            child = _node(consumer.name, "Used in RLS", edge.evidence, "")
+        elif consumer.kind in ("hierarchy", "column", "calc_item", "table"):
+            child = _node(consumer.name, f"Used in {consumer.kind}", edge.evidence, "")
+        else:
+            continue
+        key = (child["name"], child["type"])
+        if key in seen:
+            continue
+        seen.add(key)
+        node["children"].append(child)

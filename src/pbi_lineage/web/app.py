@@ -24,6 +24,7 @@ from pbi_lineage import cleanup, governance
 from pbi_lineage.lineage import (
     attach_sources,
     end_to_end_rows,
+    column_lineage_tree,
     local_item_lineage,
     tenant_item_lineage,
 )
@@ -661,6 +662,32 @@ def create_app() -> FastAPI:
         state = _tenant()
         graph = tenant_item_lineage(state.scan)
         return {"view": view, "rows": graph["data_sources"] if view == "sources" else graph["models"]}
+
+    @app.get("/api/lineage/columns")
+    def lineage_columns() -> dict:
+        """Server → database → schema → table → column → semantic model →
+        model column → the relationships, visuals and filters that use it."""
+        bundle = _require(session)
+        return {"tree": column_lineage_tree(bundle.model, bundle.analysis, session.m_index)}
+
+    @app.get("/api/lineage/columns/origins")
+    def lineage_column_origins() -> dict:
+        """The flat mapping behind the tree: model column → source column,
+        with how it was derived and what could not be followed."""
+        from pbi_lineage.mtrace import trace_model  # noqa: PLC0415 - optional path
+
+        bundle = _require(session)
+        traces = trace_model(bundle.model, session.m_index)
+        rows, unsupported = [], []
+        for table_name, trace in traces.items():
+            unsupported.extend(f"{table_name}: {s}" for s in trace.unsupported_steps)
+            for name, origin in trace.columns.items():
+                row = origin.as_dict()
+                row["table"] = table_name
+                row["source_table"] = origin.source_table or trace.source_table
+                rows.append(row)
+        rows.sort(key=lambda r: (r["table"], r["name"]))
+        return {"rows": rows, "unsupported": unsupported}
 
     # ------------------------------------------------------------ export --
 

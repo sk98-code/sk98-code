@@ -157,6 +157,7 @@
       <button data-t="objects" class="on">Objects</button>
       <button data-t="tenant" id="tabTenant" hidden>Tenant</button>
       <button data-t="items">Lineage</button>
+      <button data-t="collin">Column Lineage</button>
       <button data-t="e2e">Source → Visual</button>
       <button data-t="tree">Dependency tree</button>
       <button data-t="report">Report</button>
@@ -214,6 +215,26 @@
         <span class="muted" id="tCount"></span>
       </div>
       <div class="scroll" id="tenantBox"><div class="empty">Load a tenant scan first.</div></div>
+    </section>
+
+    <section data-p="collin" hidden>
+      <div class="filters">
+        <input type="text" id="cQ" placeholder="Search name…">
+        <label class="muted"><input type="checkbox" id="cAll" checked> Search all levels</label>
+        <button id="cExpand">Expand</button>
+        <button id="cCollapse">Collapse</button>
+        <button id="cExport">Export</button>
+        <span class="muted" id="cCount"></span>
+      </div>
+      <div class="scroll">
+        <table id="colTree"><thead><tr>
+          <th style="width:46%">Name</th><th style="width:18%">Type</th>
+          <th style="width:22%">Source</th><th style="width:14%">Status</th>
+        </tr></thead><tbody id="cRows"></tbody></table>
+      </div>
+      <div class="note">Column origins are traced through Power Query: renames,
+        projections, expands and native-SQL aliases are followed; joins, pivots and
+        custom functions are reported as untraced rather than guessed.</div>
     </section>
 
     <section data-p="items" hidden>
@@ -361,6 +382,7 @@ $('#tabs').addEventListener('click', e => {
   if(b.dataset.t==='search') $('#sQ').focus();
   if(b.dataset.t==='dups') loadDups();
   if(b.dataset.t==='items') loadItems();
+  if(b.dataset.t==='collin') loadColumnLineage();
 });
 
 /* ------------------------------------------------------------ mode -- */
@@ -675,6 +697,81 @@ async function loadTenantReport(){
     });
     table.appendChild(tb); box.appendChild(table);
   }catch(err){ box.innerHTML=''; box.appendChild(el('div','note', err.message)); }
+}
+
+/* --------------------------------------------------- column lineage -- */
+let colTree = [];
+const colOpen = new Set();
+
+$('#cQ').addEventListener('input', debounce(renderColTree, 250));
+$('#cAll').addEventListener('change', renderColTree);
+$('#cExpand').addEventListener('click', () => { walkTree(colTree, n => colOpen.add(n._id)); renderColTree(); });
+$('#cCollapse').addEventListener('click', () => { colOpen.clear(); renderColTree(); });
+$('#cExport').addEventListener('click', () => {
+  const rows = [['Name','Type','Source','Status','Detail']];
+  walkTree(colTree, (n,d) => rows.push([' '.repeat(d*2)+n.name, n.type, n.source||'', n.status||'', n.detail||'']));
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
+  a.download = 'column-lineage.csv'; a.click();
+});
+
+function walkTree(nodes, fn, depth=0){
+  nodes.forEach(n => { fn(n, depth); walkTree(n.children||[], fn, depth+1); });
+}
+
+async function loadColumnLineage(){
+  const {tree} = await api('/api/lineage/columns');
+  colTree = tree;
+  let i = 0;
+  walkTree(colTree, n => { n._id = 'n'+(i++); });
+  // open down to the model-column level so the chain is visible at a glance
+  walkTree(colTree, (n,d) => { if(d < 6) colOpen.add(n._id); });
+  renderColTree();
+}
+
+function renderColTree(){
+  const needle = $('#cQ').value.trim().toLowerCase();
+  const searchAll = $('#cAll').checked;
+  const tb = $('#cRows'); tb.innerHTML='';
+  let shown = 0;
+
+  const matches = n => !needle || (n.name||'').toLowerCase().includes(needle)
+    || (searchAll && (n.type||'').toLowerCase().includes(needle));
+  const subtreeMatches = n => matches(n) || (n.children||[]).some(subtreeMatches);
+
+  const emit = (n, depth) => {
+    if(needle && !subtreeMatches(n)) return;
+    shown++;
+    const tr = el('tr');
+    const kids = n.children||[];
+    const tdName = el('td');
+    tdName.style.paddingLeft = (10 + depth*18) + 'px';
+    if(kids.length){
+      const tw = el('span', null, colOpen.has(n._id) ? '▾ ' : '▸ ');
+      tw.style.cursor='pointer'; tw.style.color='var(--muted)';
+      tw.addEventListener('click', e => { e.stopPropagation();
+        colOpen.has(n._id) ? colOpen.delete(n._id) : colOpen.add(n._id); renderColTree(); });
+      tdName.appendChild(tw);
+    } else {
+      tdName.appendChild(el('span', null, '   '));
+    }
+    tdName.appendChild(el('span', null, n.name));
+    if(n.detail) tdName.appendChild(el('span','edge', '  (' + n.detail + ')'));
+    tr.appendChild(tdName);
+    tr.appendChild(el('td','kind', n.type||''));
+    tr.appendChild(el('td','muted', n.source||''));
+    const tdS = el('td');
+    if(n.status) tdS.appendChild(el('span','pill '+statusClass(n.status), n.status));
+    tr.appendChild(tdS);
+    if(n.status === 'Unused') tr.style.background = 'var(--unused-bg)';
+    if(n.key) tr.addEventListener('click', () => showTree(n.key, n.name));
+    tb.appendChild(tr);
+    if(colOpen.has(n._id) || (needle && searchAll)) kids.forEach(c => emit(c, depth+1));
+  };
+  colTree.forEach(n => emit(n, 0));
+  $('#cCount').textContent = shown + ' row' + (shown===1?'':'s');
+  if(!shown) tb.innerHTML = '<tr><td colspan="4" class="empty">No source could be traced for this model.</td></tr>';
 }
 
 /* ------------------------------------------------------ item lineage -- */
