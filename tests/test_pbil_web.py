@@ -119,6 +119,15 @@ def test_tree_both_directions(client):
     assert client.get("/api/tree", params={"node": "column:Nope[X]"}).status_code == 404
 
 
+def test_lineage_graph_endpoint(client):
+    client.post("/api/analyze", json={"path": client.project})
+    body = client.get("/api/lineage/graph").json()
+    kinds = {card["kind"] for card in body["nodes"]}
+    assert {"semantic_model", "report"} <= kinds
+    assert all("fields" in card and "lane" in card for card in body["nodes"])
+    assert all(edge["evidence"] for edge in body["edges"])
+
+
 def _labels(node):
     out = [node["label"]]
     for child in node["children"]:

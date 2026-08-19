@@ -113,6 +113,65 @@
   .bar{height:6px;background:var(--line);border-radius:4px;overflow:hidden;margin-top:8px}
   .bar i{display:block;height:100%;background:var(--accent)}
   .note{font-size:12px;color:var(--muted);padding:8px 12px;border-top:1px solid var(--line)}
+
+  /* ---------------------------------------------------- lineage canvas -- */
+  .gtoolbar{display:flex;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line);
+    flex-wrap:wrap;align-items:center}
+  .gwrap{position:relative;overflow:hidden;height:calc(100vh - 300px);min-height:420px;
+    background:var(--bg);
+    background-image:radial-gradient(var(--line) 1px,transparent 1px);
+    background-size:22px 22px;cursor:grab}
+  .gwrap.drag{cursor:grabbing}
+  #gCanvas{position:absolute;left:0;top:0;transform-origin:0 0}
+  #gEdges{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
+  #gEdges path{fill:none;stroke:var(--line);stroke-width:1.5}
+  #gEdges path.hl{stroke:var(--accent);stroke-width:2.5}
+  #gEdges path.dim{opacity:.15}
+  #gEdges path.cut{stroke-dasharray:4 4}
+  #gEdges circle{fill:var(--panel);stroke:var(--line)}
+  #gEdges circle.hl{stroke:var(--accent)}
+  #gEdges text{fill:var(--muted);font-size:9px;text-anchor:middle;dominant-baseline:central}
+
+  .gcard{position:absolute;width:252px;background:var(--panel);border:1px solid var(--line);
+    border-radius:9px;box-shadow:0 1px 3px rgba(0,0,0,.12);overflow:hidden}
+  .gcard.dim{opacity:.35}
+  .gcard.k-source{border-top:3px solid var(--indet)}
+  .gcard.k-dataflow{border-top:3px solid var(--manual)}
+  .gcard.k-upstream_model{border-top:3px solid var(--manual)}
+  .gcard.k-semantic_model{border-top:3px solid var(--accent)}
+  .gcard.k-report{border-top:3px solid var(--used)}
+  .ghead{display:flex;gap:6px;align-items:center;padding:8px 10px 2px}
+  .ghead .gname{font-weight:650;font-size:13px;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap;flex:1}
+  .gbadge{font-size:10px;padding:1px 7px;border-radius:20px;background:var(--accent-soft);
+    color:var(--accent);white-space:nowrap;font-weight:600}
+  .gsub{padding:0 10px 6px;font-size:11px;color:var(--muted);overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .gcard input.gsearch{width:calc(100% - 20px);margin:0 10px 6px;padding:4px 7px;font-size:12px;
+    border:1px solid var(--line);border-radius:5px;background:var(--bg);color:var(--ink);min-width:0}
+  .gcount{padding:0 10px 4px;font-size:11px;color:var(--muted)}
+  .grows{max-height:340px;overflow:auto}
+  .grow{display:flex;gap:6px;align-items:center;padding:3px 10px;font-size:12px;cursor:pointer}
+  .grow:hover{background:var(--accent-soft)}
+  .grow.sel{background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent)}
+  .grow.dim{opacity:.3}
+  .grow .glabel{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+  .grow .gtab{font-size:10px;color:var(--muted);white-space:nowrap}
+  .gdot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--extern)}
+  .gdot.d-Used{background:var(--used)} .gdot.d-Unused{background:var(--unused)}
+  .gdot.d-manual{background:var(--manual)} .gdot.d-indet{background:var(--indet)}
+  .gdot.d-measure{background:transparent;border:2px solid var(--accent)}
+  .gnote{padding:5px 10px;font-size:11px;color:var(--warn);border-top:1px solid var(--line)}
+  .gpager{display:flex;gap:6px;align-items:center;justify-content:space-between;
+    padding:4px 8px;border-top:1px solid var(--line);font-size:11px;color:var(--muted)}
+  .gpager button{padding:1px 8px;font-size:11px}
+  .glegend{display:flex;gap:6px;align-items:center;font-size:11px}
+  .glegend i{display:inline-block;margin-left:8px}
+  #gPath{padding:8px 12px;border-bottom:1px solid var(--line);font-size:12px;
+    background:var(--accent-soft);display:none}
+  #gPath.on{display:block}
+  #gPath b{font-weight:650}
+  #gPath .hop{color:var(--muted)}
 </style>
 </head>
 <body>
@@ -219,6 +278,10 @@
 
     <section data-p="collin" hidden>
       <div class="filters">
+        <select id="cView">
+          <option value="graph">Graph — artifacts and the columns flowing between them</option>
+          <option value="tree">Tree — source ▸ database ▸ table ▸ column ▸ consumer</option>
+        </select>
         <input type="text" id="cQ" placeholder="Search name…">
         <label class="muted"><input type="checkbox" id="cAll" checked> Search all levels</label>
         <button id="cExpand">Expand</button>
@@ -226,15 +289,40 @@
         <button id="cExport">Export</button>
         <span class="muted" id="cCount"></span>
       </div>
-      <div class="scroll">
-        <table id="colTree"><thead><tr>
-          <th style="width:46%">Name</th><th style="width:18%">Type</th>
-          <th style="width:22%">Source</th><th style="width:14%">Status</th>
-        </tr></thead><tbody id="cRows"></tbody></table>
+
+      <div id="colTreeView" hidden>
+        <div class="scroll">
+          <table id="colTree"><thead><tr>
+            <th style="width:46%">Name</th><th style="width:18%">Type</th>
+            <th style="width:22%">Source</th><th style="width:14%">Status</th>
+          </tr></thead><tbody id="cRows"></tbody></table>
+        </div>
       </div>
+
+      <div id="colGraphView">
+        <div class="gtoolbar">
+          <input type="text" id="gQ" placeholder="Find a column across every artifact…"
+                 style="flex:1;min-width:220px">
+          <button id="gFit">Fit</button>
+          <button id="gZoomOut">−</button>
+          <span class="muted" id="gZoom">100%</span>
+          <button id="gZoomIn">+</button>
+          <button id="gClear">Clear selection</button>
+          <span class="muted" id="gStat"></span>
+          <span class="muted glegend"><i class="gdot d-Used"></i> used
+            <i class="gdot d-Unused"></i> unused
+            <i class="gdot d-indet"></i> indeterminate
+            <i class="gdot d-measure"></i> measure</span>
+        </div>
+        <div id="gPath"></div>
+        <div class="gwrap" id="gWrap"><div id="gCanvas"><svg id="gEdges"></svg></div></div>
+      </div>
+
       <div class="note">Column origins are traced through Power Query: renames,
         projections, expands and native-SQL aliases are followed; joins, pivots and
-        custom functions are reported as untraced rather than guessed.</div>
+        custom functions are reported as untraced rather than guessed. Click any
+        column to light up its whole path; a dashed connector with a number means
+        that many hops continue to fields on a page you are not looking at.</div>
     </section>
 
     <section data-p="items" hidden>
@@ -708,6 +796,7 @@ $('#cAll').addEventListener('change', renderColTree);
 $('#cExpand').addEventListener('click', () => { walkTree(colTree, n => colOpen.add(n._id)); renderColTree(); });
 $('#cCollapse').addEventListener('click', () => { colOpen.clear(); renderColTree(); });
 $('#cExport').addEventListener('click', () => {
+  if($('#cView').value === 'graph') return exportGraphCsv();
   const rows = [['Name','Type','Source','Status','Detail']];
   walkTree(colTree, (n,d) => rows.push([' '.repeat(d*2)+n.name, n.type, n.source||'', n.status||'', n.detail||'']));
   const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
@@ -721,6 +810,8 @@ function walkTree(nodes, fn, depth=0){
 }
 
 async function loadColumnLineage(){
+  await loadColumnGraph();
+  applyColView();
   const {tree} = await api('/api/lineage/columns');
   colTree = tree;
   let i = 0;
@@ -773,6 +864,391 @@ function renderColTree(){
   $('#cCount').textContent = shown + ' row' + (shown===1?'':'s');
   if(!shown) tb.innerHTML = '<tr><td colspan="4" class="empty">No source could be traced for this model.</td></tr>';
 }
+
+/* ---------------------------------------------- column lineage canvas -- */
+/* A node-graph over the same lineage the tree shows: one card per artifact,
+   one line per column-to-column hop. Card geometry is measured from the DOM
+   rather than assumed, so a card can grow (long names, a note, a pager)
+   without the edges drifting off its rows. */
+
+const G_PAGE = 12;
+const push = (map, key, value) => { if(!map.has(key)) map.set(key, []); map.get(key).push(value); };
+let gData = null;                       // {nodes, edges} from /api/lineage/graph
+let gCard = new Map();                  // card id -> {data, el, rows, state}
+let gField = new Map();                 // field id -> {card, field}
+let gOut = new Map(), gIn = new Map();  // field id -> [edge index]
+let gSel = null;
+let gHiF = new Set(), gHiE = new Set();
+let gZoom = 1, gPanX = 20, gPanY = 20;
+
+$('#cView').addEventListener('change', applyColView);
+$('#gFit').addEventListener('click', fitGraph);
+$('#gZoomIn').addEventListener('click', () => setZoom(gZoom * 1.2));
+$('#gZoomOut').addEventListener('click', () => setZoom(gZoom / 1.2));
+$('#gClear').addEventListener('click', () => selectField(null));
+$('#gQ').addEventListener('input', debounce(() => { renderAllRows(); drawEdges(); }, 200));
+
+function applyColView(){
+  const graph = $('#cView').value === 'graph';
+  $('#colGraphView').hidden = !graph;
+  $('#colTreeView').hidden = graph;
+  // the tree's own controls mean nothing on the canvas
+  ['cQ','cAll','cExpand','cCollapse','cCount'].forEach(id => {
+    const node = $('#'+id); const box = node.closest('label') || node;
+    box.style.display = graph ? 'none' : '';
+  });
+  if(graph && gData) { layoutGraph(); fitGraph(); }
+}
+
+async function loadColumnGraph(){
+  gData = await api('/api/lineage/graph');
+  gSel = null; gHiF = new Set(); gHiE = new Set();
+  gField = new Map(); gOut = new Map(); gIn = new Map();
+  gData.edges.forEach((e, i) => { push(gOut, e.source, i); push(gIn, e.target, i); });
+  buildCards();
+  layoutGraph();
+  fitGraph();
+  const fields = gData.nodes.reduce((n, c) => n + c.fields.length, 0);
+  $('#gStat').textContent = `${gData.nodes.length} artifacts · ${fields} fields · ${gData.edges.length} hops`;
+}
+
+const G_ICON = {source:'▤', dataflow:'⇉', upstream_model:'◫', semantic_model:'◧', report:'▦'};
+
+function buildCards(){
+  const canvas = $('#gCanvas');
+  [...canvas.querySelectorAll('.gcard')].forEach(n => n.remove());
+  gCard = new Map();
+
+  gData.nodes.forEach(card => {
+    card.fields.forEach(f => gField.set(f.id, {card, field: f}));
+    const box = el('div', 'gcard k' + '-' + card.kind);
+    box.dataset.id = card.id;
+
+    const head = el('div','ghead');
+    head.appendChild(el('span','gicon', G_ICON[card.kind] || '▤'));
+    const name = el('span','gname', card.name); name.title = card.name;
+    head.appendChild(name);
+    head.appendChild(el('span','gbadge', card.badge));
+    box.appendChild(head);
+    if(card.subtitle){ const sub = el('div','gsub', card.subtitle); sub.title = card.subtitle; box.appendChild(sub); }
+
+    const search = el('input','gsearch'); search.type='text';
+    search.placeholder = 'Search ' + (card.kind === 'report' ? 'fields' : 'columns') + '…';
+    search.addEventListener('input', debounce(() => {
+      const st = gCard.get(card.id).state; st.q = search.value; st.page = 0;
+      renderRows(card.id); layoutGraph(); drawEdges();
+    }, 200));
+    search.addEventListener('mousedown', e => e.stopPropagation());
+    box.appendChild(search);
+
+    const count = el('div','gcount');
+    const rows = el('div','grows');
+    rows.addEventListener('scroll', drawEdges);
+    box.appendChild(count); box.appendChild(rows);
+
+    if(card.untraced){
+      box.appendChild(el('div','gnote',
+        `${card.untraced} column${card.untraced===1?'':'s'} not traced — ${card.untraced_reason||''}`));
+    }
+
+    const pager = el('div','gpager');
+    const prev = el('button', null, '‹ Prev'), next = el('button', null, 'Next ›');
+    const label = el('span');
+    prev.addEventListener('click', () => { const st = gCard.get(card.id).state;
+      st.page = Math.max(0, st.page-1); renderRows(card.id); layoutGraph(); drawEdges(); });
+    next.addEventListener('click', () => { const st = gCard.get(card.id).state;
+      st.page++; renderRows(card.id); layoutGraph(); drawEdges(); });
+    pager.appendChild(prev); pager.appendChild(label); pager.appendChild(next);
+    box.appendChild(pager);
+
+    canvas.appendChild(box);
+    gCard.set(card.id, {data: card, el: box, rows, count, pager, label, prev, next,
+                        state: {q:'', page:0}});
+    renderRows(card.id);
+  });
+}
+
+function fieldsOf(cardId){
+  const {data, state} = gCard.get(cardId);
+  const local = state.q.trim().toLowerCase();
+  const global = $('#gQ').value.trim().toLowerCase();
+  return data.fields.filter(f => {
+    const name = (f.name + ' ' + (f.table||'')).toLowerCase();
+    return (!local || name.includes(local)) && (!global || name.includes(global));
+  });
+}
+
+function renderRows(cardId){
+  const entry = gCard.get(cardId);
+  const all = fieldsOf(cardId);
+  const pages = Math.max(1, Math.ceil(all.length / G_PAGE));
+  entry.state.page = Math.min(entry.state.page, pages - 1);
+  const start = entry.state.page * G_PAGE;
+  const page = all.slice(start, start + G_PAGE);
+  entry.visible = new Set(page.map(f => f.id));
+
+  const noun = entry.data.kind === 'report' ? 'field' : 'column';
+  entry.count.textContent = all.length + ' ' + noun + (all.length===1?'':'s')
+    + (all.length !== entry.data.fields.length ? ` of ${entry.data.fields.length}` : '');
+
+  entry.rows.innerHTML = '';
+  page.forEach(f => {
+    const row = el('div','grow'); row.dataset.fid = f.id;
+    const dot = el('span','gdot ' + (f.kind === 'measure' || f.kind === 'report measure'
+      ? 'd-measure' : (f.status ? statusClass(f.status).replace('s-','d-') : '')));
+    dot.title = f.status || f.kind;
+    row.appendChild(dot);
+    const label = el('span','glabel', f.name);
+    label.title = [f.table && f.table + '[' + f.name + ']', f.status, f.detail]
+      .filter(Boolean).join(' — ');
+    row.appendChild(label);
+    if(f.table && entry.data.kind !== 'source') row.appendChild(el('span','gtab', f.table));
+    row.addEventListener('mousedown', e => e.stopPropagation());
+    row.addEventListener('click', () => selectField(f.id));
+    if(gSel === f.id) row.classList.add('sel');
+    if(gHiF.size && !gHiF.has(f.id)) row.classList.add('dim');
+    entry.rows.appendChild(row);
+  });
+  if(!page.length){
+    entry.rows.appendChild(el('div','gnote', entry.data.fields.length
+      ? 'nothing matches this filter' : 'no column of this table could be traced'));
+  }
+
+  entry.pager.style.display = pages > 1 ? '' : 'none';
+  entry.label.textContent = `${entry.state.page + 1} / ${pages}`;
+  entry.prev.disabled = entry.state.page === 0;
+  entry.next.disabled = entry.state.page >= pages - 1;
+  entry.el.classList.toggle('dim', gHiF.size > 0 && !entry.data.fields.some(f => gHiF.has(f.id)));
+}
+
+function renderAllRows(){ gCard.forEach((_, id) => renderRows(id)); layoutGraph(); }
+
+function layoutGraph(){
+  const lanes = new Map();
+  gData.nodes.forEach(card => push(lanes, card.lane, card.id));
+  let width = 0, height = 0;
+  [...lanes.keys()].sort((a,b)=>a-b).forEach(lane => {
+    let top = 0;
+    lanes.get(lane).forEach(id => {
+      const entry = gCard.get(id);
+      const left = lane * 340;
+      entry.el.style.left = left + 'px';
+      entry.el.style.top = top + 'px';
+      top += entry.el.offsetHeight + 26;
+      width = Math.max(width, left + entry.el.offsetWidth);
+      height = Math.max(height, top);
+    });
+  });
+  const canvas = $('#gCanvas');
+  canvas.style.width = (width + 40) + 'px';
+  canvas.style.height = (height + 40) + 'px';
+  const svg = $('#gEdges');
+  svg.setAttribute('width', width + 40); svg.setAttribute('height', height + 40);
+  drawEdges();
+}
+
+/* Where an edge should attach: the middle of the field's row when that row
+   is on screen, otherwise the card's own edge — which is the honest way to
+   say "this hop continues on a page you are not looking at". */
+function anchorOf(fieldId, side){
+  const owner = gField.get(fieldId);
+  if(!owner) return null;
+  const entry = gCard.get(owner.card.id);
+  if(!entry) return null;
+  const canvasRect = $('#gCanvas').getBoundingClientRect();
+  const cardRect = entry.el.getBoundingClientRect();
+  const x = ((side === 'out' ? cardRect.right : cardRect.left) - canvasRect.left) / gZoom;
+  const row = entry.visible.has(fieldId)
+    ? entry.rows.querySelector(`[data-fid="${cssEscape(fieldId)}"]`) : null;
+  if(!row) return {x, y: (cardRect.top - canvasRect.top) / gZoom + 22, cut: true};
+  const rowRect = row.getBoundingClientRect();
+  const rowsRect = entry.rows.getBoundingClientRect();
+  const centre = rowRect.top + rowRect.height / 2;
+  if(centre < rowsRect.top || centre > rowsRect.bottom)  // scrolled out of its own list
+    return {x, y: (cardRect.top - canvasRect.top) / gZoom + 22, cut: true};
+  return {x, y: (centre - canvasRect.top) / gZoom, cut: false};
+}
+
+function cssEscape(value){
+  return window.CSS && CSS.escape ? CSS.escape(value) : value.replace(/["\\]/g, '\\$&');
+}
+
+function drawEdges(){
+  const svg = $('#gEdges');
+  svg.innerHTML = '';
+  const ns = 'http://www.w3.org/2000/svg';
+  const bundles = new Map();
+
+  const curve = (from, to) => {
+    const dx = Math.max(40, (to.x - from.x) / 2);
+    return {
+      d: `M${from.x},${from.y} C${from.x+dx},${from.y} ${to.x-dx},${to.y} ${to.x},${to.y}`,
+      mid: {x: (from.x + 3*(from.x+dx) + 3*(to.x-dx) + to.x) / 8,
+            y: (from.y + 3*from.y + 3*to.y + to.y) / 8},
+    };
+  };
+
+  gData.edges.forEach((edge, i) => {
+    const a = gField.get(edge.source), b = gField.get(edge.target);
+    if(!a || !b || a.card.id === b.card.id) return;   // intra-card hops stay implicit
+    const from = anchorOf(edge.source, 'out'), to = anchorOf(edge.target, 'in');
+    if(!from || !to) return;
+    const hot = gHiE.has(i);
+
+    // Hops whose other end is off-page all land on the same card edge, so
+    // drawing them one by one just stacks identical curves. Bundle them
+    // into a single counted connector — unless the hop is part of the
+    // selected path, which must stay individually traceable.
+    if((from.cut || to.cut) && !hot){
+      const key = a.card.id + '|' + b.card.id;
+      const bundle = bundles.get(key) || {from, to, count: 0};
+      bundle.count++;
+      bundles.set(key, bundle);
+      return;
+    }
+
+    const {d, mid} = curve(from, to);
+    const path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', d);
+    path.setAttribute('class', (hot ? 'hl' : '') + (gHiE.size && !hot ? ' dim' : '')
+      + (from.cut || to.cut ? ' cut' : ''));
+    const title = document.createElementNS(ns, 'title');
+    title.textContent = `${a.field.name} → ${b.field.name} (${edge.kind}) — ${edge.evidence||''}`;
+    path.appendChild(title);
+    svg.appendChild(path);
+    if(from.cut || to.cut) marker(svg, ns, mid, '…', hot, 'the other end is on another page of its card');
+  });
+
+  bundles.forEach(bundle => {
+    const {d, mid} = curve(bundle.from, bundle.to);
+    const path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', d);
+    path.setAttribute('class', 'cut' + (gHiE.size ? ' dim' : ''));
+    svg.appendChild(path);
+    marker(svg, ns, mid, String(bundle.count), false,
+      `${bundle.count} more hop(s) — page or search to the fields they reach`);
+  });
+}
+
+function marker(svg, ns, at, text, hot, tip){
+  const dot = document.createElementNS(ns, 'circle');
+  dot.setAttribute('cx', at.x); dot.setAttribute('cy', at.y); dot.setAttribute('r', 9);
+  if(hot) dot.setAttribute('class', 'hl');
+  const title = document.createElementNS(ns, 'title'); title.textContent = tip;
+  dot.appendChild(title);
+  svg.appendChild(dot);
+  const label = document.createElementNS(ns, 'text');
+  label.setAttribute('x', at.x); label.setAttribute('y', at.y);
+  label.textContent = text;
+  svg.appendChild(label);
+}
+
+function selectField(fieldId){
+  gSel = fieldId;
+  gHiF = new Set(); gHiE = new Set();
+  if(fieldId){
+    walkGraph(fieldId, gOut, e => e.target);
+    walkGraph(fieldId, gIn, e => e.source);
+    gHiF.add(fieldId);
+    // bring each involved card to the page its highlighted field sits on
+    gCard.forEach((entry, id) => {
+      const all = fieldsOf(id);
+      const hit = all.findIndex(f => gHiF.has(f.id));
+      if(hit >= 0) entry.state.page = Math.floor(hit / G_PAGE);
+    });
+  }
+  gCard.forEach((_, id) => renderRows(id));
+  layoutGraph();
+  renderPath(fieldId);
+}
+
+function walkGraph(start, adjacency, step){
+  const queue = [start], seen = new Set([start]);
+  while(queue.length){
+    const current = queue.shift();
+    gHiF.add(current);
+    (adjacency.get(current) || []).forEach(i => {
+      gHiE.add(i);
+      const next = step(gData.edges[i]);
+      if(!seen.has(next)){ seen.add(next); queue.push(next); }
+    });
+  }
+}
+
+function renderPath(fieldId){
+  const box = $('#gPath');
+  if(!fieldId){ box.className = ''; box.innerHTML = ''; return; }
+  box.className = 'on'; box.innerHTML = '';
+  const owner = gField.get(fieldId);
+  const head = el('div', null, '');
+  head.appendChild(el('b', null, `${owner.card.name} (${owner.card.badge}) · ${owner.field.name}`));
+  head.appendChild(el('span','hop', `  —  ${gHiF.size - 1} connected field(s) over ${gHiE.size} hop(s)`));
+  box.appendChild(head);
+  const where = owner2 => `${owner2.card.name} (${owner2.card.badge})`;
+  const hops = [...gHiE].map(i => gData.edges[i])
+    .map(e => ({from: gField.get(e.source), to: gField.get(e.target), edge: e}))
+    .filter(h => h.from && h.to)
+    .sort((x, y) => x.from.card.lane - y.from.card.lane);
+  hops.slice(0, 14).forEach(h => {
+    const line = el('div','hop',
+      `${where(h.from)} · ${h.from.field.name}  →  ${where(h.to)} · ${h.to.field.name}`
+      + `  (${h.edge.kind}${h.edge.evidence ? ' — ' + h.edge.evidence : ''})`);
+    box.appendChild(line);
+  });
+  if(hops.length > 14) box.appendChild(el('div','hop', `…and ${hops.length - 14} more`));
+}
+
+function exportGraphCsv(){
+  if(!gData) return;
+  const rows = [['From artifact','From kind','From field','To artifact','To kind','To field','Hop','Evidence']];
+  gData.edges.forEach(e => {
+    const a = gField.get(e.source), b = gField.get(e.target);
+    if(!a || !b) return;
+    rows.push([a.card.name, a.card.badge, a.field.name,
+               b.card.name, b.card.badge, b.field.name, e.kind, e.evidence || '']);
+  });
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv'}));
+  a.download = 'column-lineage-graph.csv'; a.click();
+}
+
+/* ---- pan & zoom ---- */
+function applyTransform(){
+  $('#gCanvas').style.transform = `translate(${gPanX}px,${gPanY}px) scale(${gZoom})`;
+  $('#gZoom').textContent = Math.round(gZoom * 100) + '%';
+  drawEdges();
+}
+function setZoom(next){
+  gZoom = Math.min(2.5, Math.max(0.2, next));
+  applyTransform();
+}
+function fitGraph(){
+  const wrap = $('#gWrap'), canvas = $('#gCanvas');
+  const w = canvas.offsetWidth || 1, h = canvas.offsetHeight || 1;
+  gZoom = Math.min(1, Math.min((wrap.clientWidth - 24) / w, (wrap.clientHeight - 24) / h));
+  gZoom = Math.max(0.2, gZoom);
+  gPanX = 12; gPanY = 12;
+  applyTransform();
+}
+(function panZoom(){
+  const wrap = $('#gWrap');
+  let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
+  wrap.addEventListener('mousedown', e => {
+    dragging = true; sx = e.clientX; sy = e.clientY; ox = gPanX; oy = gPanY;
+    wrap.classList.add('drag');
+  });
+  window.addEventListener('mousemove', e => {
+    if(!dragging) return;
+    gPanX = ox + (e.clientX - sx); gPanY = oy + (e.clientY - sy);
+    applyTransform();
+  });
+  window.addEventListener('mouseup', () => { dragging = false; wrap.classList.remove('drag'); });
+  wrap.addEventListener('wheel', e => {
+    e.preventDefault();
+    setZoom(gZoom * (e.deltaY < 0 ? 1.1 : 1/1.1));
+  }, {passive:false});
+})();
 
 /* ------------------------------------------------------ item lineage -- */
 $('#itemView').addEventListener('change', loadItems);

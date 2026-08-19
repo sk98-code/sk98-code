@@ -4,7 +4,7 @@ The contract: follow what M actually says, and mark what cannot be followed
 as untraced rather than guessing an origin.
 """
 
-from pbi_lineage.lineage import column_lineage_tree
+from pbi_lineage.lineage import column_lineage_graph, column_lineage_tree
 from pbi_lineage.mindex import MExpressionIndex
 from pbi_lineage.mtrace import trace_table
 from pbi_lineage.resolve import analyze_model
@@ -213,3 +213,91 @@ def test_unused_source_column_is_still_shown():
     tree = column_lineage_tree(model, analyze_model(model, [report]), index)
     order_id = _find(tree, "order_id", "Model column")
     assert order_id["status"] == "Unused"
+
+
+# ---------------------------------------------------------------------------
+# The same lineage, shaped for the node-graph canvas
+# ---------------------------------------------------------------------------
+
+
+def _graph():
+    model, report, index = _fixture()
+    return column_lineage_graph(model, analyze_model(model, [report]), index, [report])
+
+
+def _card(graph, kind):
+    return next(card for card in graph["nodes"] if card["kind"] == kind)
+
+
+def _names(card):
+    return {field["name"] for field in card["fields"]}
+
+
+def test_graph_has_one_card_per_artifact_in_flow_order():
+    graph = _graph()
+    lanes = {card["kind"]: card["lane"] for card in graph["nodes"]}
+    assert lanes["source"] < lanes["semantic_model"] < lanes["report"]
+    assert _card(graph, "source")["name"] == "orders"
+    assert _card(graph, "source")["badge"] == "PostgreSQL table"
+
+
+def test_source_card_carries_the_traced_source_columns():
+    graph = _graph()
+    assert "total_amount" in _names(_card(graph, "source"))
+
+
+def test_model_card_carries_columns_and_measures_with_status():
+    graph = _graph()
+    fields = {f["name"]: f for f in _card(graph, "semantic_model")["fields"]}
+    assert fields["GrossAmount"]["status"] == "Used"
+    assert fields["order_id"]["status"] == "Unused"
+    assert fields["Total Gross"]["kind"] == "measure"
+
+
+def test_report_card_holds_fields_not_pages_or_visuals():
+    graph = _graph()
+    names = _names(_card(graph, "report"))
+    assert "GrossAmount" in names
+    assert "Page 1" not in names, "a page is structure, not a consumed field"
+    assert "lineChart" not in names, "a visual is structure, not a consumed field"
+
+
+def test_the_hop_chain_runs_source_column_to_report_field():
+    """The point of the canvas: one unbroken path per column."""
+    graph = _graph()
+    source = _card(graph, "source")["id"]
+    model = _card(graph, "semantic_model")["id"]
+    report = _card(graph, "report")["id"]
+    pairs = {(e["source"], e["target"]) for e in graph["edges"]}
+
+    assert (f"{source}::column::total_amount", f"{model}::column::GrossAmount") in pairs
+    assert (f"{model}::column::GrossAmount", f"{report}::field::GrossAmount") in pairs
+
+
+def test_every_hop_names_its_evidence():
+    """§8: evidence is not optional — a line on the canvas is a claim."""
+    graph = _graph()
+    assert graph["edges"]
+    assert all(edge["evidence"] for edge in graph["edges"])
+
+
+def test_a_column_that_could_not_be_traced_is_counted_not_invented():
+    """PIVOT_M loses its columns; the source card must say so rather than
+    show a column it never saw."""
+    model = Model(
+        name="M",
+        tables=[
+            Table(
+                name="Orders",
+                columns=[Column(name="North"), Column(name="South")],
+                partitions=[Partition(name="p", source_type="m", expression=PIVOT_M)],
+            )
+        ],
+    )
+    index = MExpressionIndex()
+    index.add_model(model)
+    graph = column_lineage_graph(model, analyze_model(model, []), index, [])
+    source = _card(graph, "source")
+    assert source["fields"] == []
+    assert source["untraced"] == 2
+    assert source["untraced_reason"]

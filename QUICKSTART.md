@@ -34,7 +34,7 @@ your PATH: `pbi-lineage` and `bimigrate`.
 pytest -q
 ```
 
-Expected: **245 passed**. If that passes, everything is wired correctly.
+Expected: **253 passed**. If that passes, everything is wired correctly.
 
 ## 3. Web UI (sabse aasan tareeka)
 
@@ -48,7 +48,10 @@ File ka path daaliye (`.pbix` ya `.pbip` project folder) aur **Analyze** dabaiye
 - **Execution summary + log** — kitne unused columns/measures, relationships, findings
 - **Objects** — har object ka status (Used / Unused / Indeterminate …) aur *kyun* (evidence ke saath)
 - **Dependency tree** — kisi bhi column par click karke poori lineage: column → measure → visual → page → report
-- **Column Lineage** — server → database → schema → table → source column → semantic model → model column → measure/visual, Power Query ke rename/select/native-SQL steps ke through traced
+- **Column Lineage** — do views:
+  - *Graph* — har artifact ka apna card (source table, dataflow, semantic model, report), har card me apna column search aur paging; column par click kariye to uska poora raasta (upstream + downstream) highlight ho jaata hai
+  - *Tree* — server → database → schema → table → source column → semantic model → model column → measure/visual
+  Dono Power Query ke rename/select/expand/native-SQL steps ke through traced hain
 - **M expressions** — saara Power Query code, upstream source ke saath
 - **Best practices** — rule findings
 - **Removal preview** — unused objects tick karke TMSL delete script; jo safe nahi hai woh BLOCKED

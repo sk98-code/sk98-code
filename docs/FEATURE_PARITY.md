@@ -43,8 +43,12 @@ columns forward through navigation, `Value.NativeQuery` (including SQL
 `SELECT a AS b` aliases), `Table.RenameColumns`, `Table.SelectColumns` /
 `RemoveColumns`, `Table.AddColumn` (recorded as *computed from* its inputs)
 and `Table.ExpandTableColumn`. The **Column Lineage** tab renders the full
-chain — server → database → schema → table → source column → semantic model
-→ model column → measure / visual / relationship.
+chain two ways: a **graph canvas** — one card per artifact (source table,
+dataflow, semantic model, report), each with its own column search and
+paging, joined by one curved connector per column-to-column hop, where
+clicking a column lights its whole path upstream and downstream — and a
+**tree** — server → database → schema → table → source column → semantic
+model → model column → measure / visual / relationship.
 
 The honest limits, and they matter:
 

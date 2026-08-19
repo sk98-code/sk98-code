@@ -24,6 +24,7 @@ from pbi_lineage import cleanup, governance
 from pbi_lineage.lineage import (
     attach_sources,
     end_to_end_rows,
+    column_lineage_graph,
     column_lineage_tree,
     local_item_lineage,
     tenant_item_lineage,
@@ -669,6 +670,15 @@ def create_app() -> FastAPI:
         model column → the relationships, visuals and filters that use it."""
         bundle = _require(session)
         return {"tree": column_lineage_tree(bundle.model, bundle.analysis, session.m_index)}
+
+    @app.get("/api/lineage/graph")
+    def lineage_graph() -> dict:
+        """The same lineage as the tree, shaped for the node-graph canvas:
+        one card per artifact, one edge per field-to-field hop."""
+        bundle = _require(session)
+        return column_lineage_graph(
+            bundle.model, bundle.analysis, session.m_index, bundle.reports
+        )
 
     @app.get("/api/lineage/columns/origins")
     def lineage_column_origins() -> dict:

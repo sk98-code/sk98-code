@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from pbi_lineage.graph import DependencyGraph, Node, nid_column, nid_table
+from pbi_lineage.graph import DependencyGraph, Node, nid_column, nid_measure, nid_table
 from pbi_lineage.mindex import MExpressionIndex
 from pbi_lineage.resolve import AnalysisResult
 from pbi_lineage.schema import Model
@@ -640,3 +640,297 @@ def _fill_consumers(node: dict, node_id: str, graph) -> None:
             continue
         seen.add(key)
         node["children"].append(child)
+
+
+# ---------------------------------------------------------------------------
+# Node-graph shape of the same lineage
+# ---------------------------------------------------------------------------
+
+_DATAFLOW_SYSTEMS = {"PowerPlatform.Dataflows", "Dataflows.Contents", "PowerBI.Dataflows"}
+_UPSTREAM_MODEL_SYSTEMS = {
+    "AnalysisServices.Database",
+    "AnalysisServices.Databases",
+    "PowerBI.Datamarts",
+    "PowerBIDatamarts.Contents",
+}
+
+
+class _GraphBuilder:
+    """Accumulates cards (artifacts) and the field-to-field hops between them.
+
+    A *card* is one artifact — a source table, a dataflow entity, the
+    semantic model, a report. A *field* is one column or measure on that
+    card. Edges join fields, not cards, which is the whole point: the
+    picture has to answer "this column, where does it go", not "these two
+    artifacts are related somehow".
+    """
+
+    def __init__(self) -> None:
+        self.cards: dict[str, dict] = {}
+        self.edges: list[dict] = []
+        self._edge_keys: set[tuple[str, str, str]] = set()
+
+    def card(self, card_id: str, kind: str, name: str, badge: str, subtitle: str = "") -> dict:
+        card = self.cards.get(card_id)
+        if card is None:
+            card = {
+                "id": card_id,
+                "kind": kind,
+                "name": name,
+                "badge": badge,
+                "subtitle": subtitle,
+                "fields": [],
+                "lane": 0,
+            }
+            self.cards[card_id] = card
+            card["_index"] = {}
+        return card
+
+    def field(self, card: dict, name: str, kind: str = "column", **extra) -> str:
+        field_id = f"{card['id']}::{kind}::{name}"
+        existing = card["_index"].get(field_id)
+        if existing is not None:
+            for key, value in extra.items():
+                if value and not existing.get(key):
+                    existing[key] = value
+            return field_id
+        entry = {"id": field_id, "name": name, "kind": kind, "status": "", "table": "", "detail": ""}
+        entry.update({k: v for k, v in extra.items() if v is not None})
+        card["fields"].append(entry)
+        card["_index"][field_id] = entry
+        return field_id
+
+    def link(self, source: str, target: str, kind: str, evidence: str) -> None:
+        key = (source, target, kind)
+        if source == target or key in self._edge_keys:
+            return
+        self._edge_keys.add(key)
+        self.edges.append({"source": source, "target": target, "kind": kind, "evidence": evidence})
+
+    def result(self) -> dict:
+        _assign_lanes(self.cards, self.edges)
+        cards = sorted(self.cards.values(), key=lambda c: (c["lane"], c["name"].lower()))
+        for card in cards:
+            card.pop("_index", None)
+        return {"nodes": cards, "edges": self.edges}
+
+
+def _card_of(field_id: str) -> str:
+    return field_id.split("::", 1)[0]
+
+
+_LANE_FLOOR = {"source": 0, "dataflow": 1, "upstream_model": 1, "semantic_model": 2, "report": 3}
+
+
+def _assign_lanes(cards: dict[str, dict], edges: list[dict]) -> None:
+    """Lane = longest path *into* a card, floored by what kind of artifact
+    it is. The path is what actually orders a dataflow between its
+    warehouse and the model; the floor is what keeps a card whose columns
+    could not be traced — so it has no edges at all — on the upstream side
+    where it belongs instead of drifting to the end of the canvas."""
+    incoming: dict[str, set[str]] = {card_id: set() for card_id in cards}
+    for edge in edges:
+        source, target = _card_of(edge["source"]), _card_of(edge["target"])
+        if source != target and target in incoming and source in cards:
+            incoming[target].add(source)
+
+    memo: dict[str, int] = {}
+
+    def depth(card_id: str, seen: frozenset[str]) -> int:
+        if card_id in memo:
+            return memo[card_id]
+        if card_id in seen:  # a cycle cannot deepen the layout
+            return 0
+        best = 0
+        for previous in incoming.get(card_id, ()):
+            best = max(best, 1 + depth(previous, seen | {card_id}))
+        memo[card_id] = best
+        return best
+
+    for card_id, card in cards.items():
+        card["lane"] = max(depth(card_id, frozenset()), _LANE_FLOOR.get(card["kind"], 0))
+
+    # A model with no dataflow leaves lane 1 empty; compact so the canvas
+    # has no blank column between the source and the model.
+    used = sorted({card["lane"] for card in cards.values()})
+    compacted = {lane: i for i, lane in enumerate(used)}
+    for card in cards.values():
+        card["lane"] = compacted[card["lane"]]
+
+
+def column_lineage_graph(
+    model: Model,
+    analysis: AnalysisResult,
+    index: MExpressionIndex,
+    reports: list | None = None,
+) -> dict:
+    """The lineage of `column_lineage_tree`, shaped for a node-graph canvas.
+
+    Returns `{"nodes": [...cards...], "edges": [...field hops...]}`. Each
+    card carries its own field list so the view can search and page within
+    one artifact without another round trip; each edge names the two fields
+    it joins and the evidence for the hop.
+    """
+    from pbi_lineage.mtrace import trace_model  # noqa: PLC0415 — keeps the import graph flat
+
+    traces = trace_model(model, index)
+    graph = analysis.graph
+    builder = _GraphBuilder()
+
+    model_card = builder.card(
+        f"model:{model.name}",
+        "semantic_model",
+        model.name,
+        "semantic model",
+        f"{len(model.tables)} tables",
+    )
+    field_of: dict[str, str] = {}
+    for table in model.tables:
+        for column in table.columns:
+            node_id = nid_column(table.name, column.name)
+            verdict = analysis.verdicts.get(node_id)
+            origin = traces.get(table.name).columns.get(column.name) if table.name in traces else None
+            field_of[node_id] = builder.field(
+                model_card,
+                column.name,
+                "column",
+                table=table.name,
+                status=verdict.status if verdict else "",
+                key=node_id,
+                detail=origin.detail if origin else "",
+                derivation=origin.derivation if origin else "untraced",
+            )
+        for measure in table.measures:
+            node_id = nid_measure(measure.name)
+            verdict = analysis.verdicts.get(node_id)
+            field_of[node_id] = builder.field(
+                model_card,
+                measure.name,
+                "measure",
+                table=table.name,
+                status=verdict.status if verdict else "",
+                key=node_id,
+            )
+
+    _add_source_cards(builder, model, index, traces, field_of)
+    _add_report_cards(builder, graph, model_card, field_of, builder.link)
+    _add_model_internal_links(builder, graph, field_of)
+    return builder.result()
+
+
+def _add_source_cards(builder, model, index, traces, field_of) -> None:
+    """One card per upstream object, with the columns that were actually
+    traced out of it. A column we could not follow gets no source field —
+    the gap in the picture is the honest report of the gap in the trace."""
+    for table in model.tables:
+        trace = traces.get(table.name)
+        for ref in sources_for_table(index, table.name):
+            system = _system_label(ref.system)
+            if ref.system in _DATAFLOW_SYSTEMS:
+                kind, badge = "dataflow", "dataflow"
+            elif ref.system in _UPSTREAM_MODEL_SYSTEMS:
+                kind, badge = "upstream_model", "upstream semantic model"
+            else:
+                kind, badge = "source", f"{system} table"
+            schema = (trace.source_schema if trace else None) or ""
+            table_label = ((trace.source_table if trace else None) or ref.label).split(".")[-1]
+            subtitle = " · ".join(p for p in (ref.server, ref.database, schema) if p)
+            card = builder.card(
+                f"src:{ref.server}|{ref.database}|{schema}|{table_label}",
+                kind,
+                table_label,
+                badge,
+                subtitle,
+            )
+            if trace is None:
+                card.setdefault("untraced", 0)
+                card.setdefault("untraced_reason", "no Power Query expression was found for this table")
+                continue
+            lost = 0
+            for column_name, origin in trace.columns.items():
+                if not origin.source_column:
+                    lost += 1
+                    continue
+                source_field = builder.field(card, origin.source_column, "column", table=table_label)
+                target = field_of.get(nid_column(table.name, column_name))
+                if target:
+                    builder.link(
+                        source_field,
+                        target,
+                        origin.derivation,
+                        origin.detail or f"traced through {len(origin.steps)} Power Query step(s)",
+                    )
+            if lost:
+                # Say how many columns were lost and at which step. A card
+                # that is simply empty reads as "no data here"; it has to
+                # read as "the trace stopped here, and this is why".
+                card["untraced"] = card.get("untraced", 0) + lost
+                card.setdefault(
+                    "untraced_reason",
+                    trace.unsupported_steps[0]
+                    if trace.unsupported_steps
+                    else "the source columns are not named in the query",
+                )
+
+
+def _add_report_cards(builder, graph, model_card, field_of, link) -> None:
+    """A card per report, carrying the model fields that report consumes."""
+    for edge in graph.edges:
+        consumer = graph.nodes.get(edge.source)
+        target = graph.nodes.get(edge.target)
+        if consumer is None or target is None or consumer.kind not in ("visual", "page", "report"):
+            continue
+        if target.kind not in ("column", "measure", "hierarchy", "calc_item"):
+            continue  # report→page and page→visual are structure, not field usage
+        report_node = _report_of(graph, consumer)
+        if report_node is None:
+            continue
+        card = builder.card(f"report:{report_node.id}", "report", report_node.name, "report")
+        where = _where_label(graph, consumer, edge.kind)
+        name = target.name
+        if target.kind == "column" and "[" in name:
+            name = name.split("[", 1)[1].rstrip("]")
+        report_field = builder.field(
+            card,
+            name,
+            "measure" if target.kind == "measure" else "field",
+            table=target.meta.get("table", ""),
+            detail=where,
+        )
+        upstream = field_of.get(edge.target)
+        if upstream is None and target.kind == "measure":
+            # a report-level measure lives on the report, not in the model
+            upstream = builder.field(card, target.name, "report measure", detail="report-level measure")
+            field_of[edge.target] = upstream
+        if upstream:
+            link(upstream, report_field, edge.kind, edge.evidence or where)
+
+
+def _report_of(graph, node):
+    seen = 0
+    while node is not None and node.kind != "report" and seen < 5:
+        node = graph.nodes.get(node.parent) if node.parent else None
+        seen += 1
+    return node if node is not None and node.kind == "report" else None
+
+
+def _where_label(graph, consumer, kind: str) -> str:
+    label = _CONSUMER_LABELS.get(kind, "used by")
+    if consumer.kind != "visual":
+        return f"{label} ({consumer.kind}-level filter)"
+    page = graph.nodes.get(consumer.parent) if consumer.parent else None
+    visual = consumer.meta.get("visual_type") or consumer.name
+    return f"{label} — {visual}" + (f" on {page.name}" if page else "")
+
+
+def _add_model_internal_links(builder, graph, field_of) -> None:
+    """Measure → column hops inside the model card. They are not drawn
+    between cards, but a highlighted path has to run through them or the
+    chain "source column → measure → visual" breaks in the middle."""
+    for edge in graph.edges:
+        consumer = graph.nodes.get(edge.source)
+        if consumer is None or consumer.kind not in ("measure", "column", "hierarchy", "calc_item"):
+            continue
+        source_field, target_field = field_of.get(edge.target), field_of.get(edge.source)
+        if source_field and target_field and _card_of(source_field) == _card_of(target_field):
+            builder.link(source_field, target_field, edge.kind, edge.evidence)
