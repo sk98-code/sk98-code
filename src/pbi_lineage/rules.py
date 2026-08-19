@@ -90,7 +90,7 @@ def _implicit_measures(context: EstateContext) -> Iterable[Finding]:
                         SEVERITY_WARNING,
                         nid_column(key[0], key[1]),
                         f"{key[0]}[{key[1]}] is aggregated implicitly ({behaviour}) in "
-                        f"the {where} on page “{page.name}”",
+                        f"the {where} on page “{page.display_name or page.name}”",
                         {"report": report.name, "page": page.name, "summarize_by": behaviour},
                     )
 
