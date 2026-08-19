@@ -8,6 +8,10 @@ Two independent tools live in this repo:
 2. **`bimigrate`** — the older BI migration platform (Tableau / Spotfire /
    Qlik → Power BI), including an optional local web UI.
 
+> **On Windows?** There is a step-by-step PowerShell walkthrough in
+> [`docs/RUN_ON_WINDOWS.md`](docs/RUN_ON_WINDOWS.md), including the
+> execution-policy hurdle PowerShell puts in front of `Activate.ps1`.
+
 ## 1. Install
 
 Requires **Python 3.11+**.
@@ -86,6 +90,16 @@ open in any SQLite browser.
 ### No .pbix handy? Generate a demo project
 
 ```bash
+python scripts/make_demo.py          # writes ./demo/RetailDemo
+pbi-lineage analyze demo/RetailDemo --out ./results
+```
+
+That project is built to exercise the column lineage: a Power Query
+rename, a computed column derived from it, and a column nothing consumes.
+
+<details><summary>Or build one inline</summary>
+
+```bash
 python - <<'EOF'
 import sys; sys.path.insert(0, "tests")
 from pathlib import Path
@@ -134,6 +148,15 @@ pbi-lineage analyze demo/SalesDemo --out ./results
 You should see `Sales[DiscountCode]` reported as **Unused** while `Qty` and
 `Region` stay **Used** — `Qty` because the `Total Sales` measure consumes
 it, `Region` because a visual projects it.
+
+</details>
+
+### Trying the estate view without a tenant
+
+Switch the header dropdown to **Power BI Service**, keep the mode on
+*Replay a saved scan*, and point it at `demo_estate/sample_tenant_scan.json`.
+The **Column Lineage** tab then offers *Graph — whole tenant*: source →
+dataflow (Gen1/Gen2) → semantic model → chained model → report.
 
 ## 5. Run the migration tool (optional)
 
