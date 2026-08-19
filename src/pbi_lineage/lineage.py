@@ -719,7 +719,15 @@ def _card_of(field_id: str) -> str:
     return field_id.split("::", 1)[0]
 
 
-_LANE_FLOOR = {"source": 0, "dataflow": 1, "upstream_model": 1, "semantic_model": 2, "report": 3}
+_LANE_FLOOR = {
+    "source": 0,
+    "dataflow": 1,
+    "upstream_model": 1,
+    "semantic_model": 2,
+    "report": 3,
+    "paginated": 3,
+    "notebook": 3,
+}
 
 
 def _assign_lanes(cards: dict[str, dict], edges: list[dict]) -> None:
@@ -934,3 +942,278 @@ def _add_model_internal_links(builder, graph, field_of) -> None:
         source_field, target_field = field_of.get(edge.target), field_of.get(edge.source)
         if source_field and target_field and _card_of(source_field) == _card_of(target_field):
             builder.link(source_field, target_field, edge.kind, edge.evidence)
+
+
+# ---------------------------------------------------------------------------
+# Tenant graph: data source → dataflow (Gen1/Gen2) → semantic model →
+# chained semantic model → report (thin or thick) / paginated / notebook
+# ---------------------------------------------------------------------------
+
+
+def _dataflow_generation(dataflow: dict) -> str:
+    """What the scan states, not what we would like it to say.
+
+    The Scanner marks a Fabric Dataflow Gen2 with `generation: 2`. Anything
+    else is a Power BI (Gen1) dataflow. When the field is missing entirely
+    the generation is unknown, and saying "Gen1" would be a guess.
+    """
+    generation = dataflow.get("generation")
+    if generation is None:
+        return ""
+    return "Gen2" if int(generation) == 2 else "Gen1"
+
+
+def _report_binding(report: dict, workspace_id: str, dataset_workspace: str, sibling_count: int) -> str:
+    """Thin or thick, said only as far as the scan actually supports.
+
+    A report whose model lives in another workspace is thin beyond doubt.
+    A model serving several reports is being used as a shared model, so
+    those reports are thin. A model with exactly one report cannot be told
+    apart from a thick publish by the scan alone — so it is not claimed.
+    """
+    if dataset_workspace and dataset_workspace != workspace_id:
+        return "thin report — model in another workspace"
+    if sibling_count > 1:
+        return "thin report — shared model"
+    return "report — thin or thick not stated by the scan"
+
+
+def tenant_lineage_graph(scan: dict, *, infer_names: bool = False) -> dict:
+    """The whole estate as one canvas.
+
+    Every edge here comes from lineage the Scanner payload *declares* —
+    `datasourceUsages`, `upstreamDataflows`, `upstreamDatasets`,
+    `report.datasetId`. Where an edge joins two artifacts rather than two
+    columns, it is emitted at artifact grain and the canvas draws it
+    differently: the scan states which model reads which dataflow, it does
+    not state which column came from which entity attribute.
+
+    `infer_names=True` additionally joins a dataflow entity attribute to a
+    model column of the same name. That is an inference, never evidence,
+    and every such edge says so in its own evidence string.
+    """
+    builder = _GraphBuilder()
+    workspaces = scan.get("workspaces", []) or []
+
+    datasource_by_id = {
+        str(d.get("datasourceId") or d.get("datasourceInstanceId") or ""): d
+        for d in (scan.get("datasourceInstances", []) or [])
+    }
+    # dataset id -> (card id, workspace id); needed for chained models and reports
+    dataset_card: dict[str, str] = {}
+    dataset_workspace: dict[str, str] = {}
+    report_count: dict[str, int] = {}
+    for workspace in workspaces:
+        for dataset in workspace.get("datasets", []) or []:
+            dataset_workspace[str(dataset.get("id", ""))] = str(workspace.get("id", ""))
+        for report in workspace.get("reports", []) or []:
+            report_count[str(report.get("datasetId", ""))] = (
+                report_count.get(str(report.get("datasetId", "")), 0) + 1
+            )
+
+    def source_card(datasource_id: str) -> dict | None:
+        raw = datasource_by_id.get(str(datasource_id))
+        if raw is None:
+            return None
+        details = raw.get("connectionDetails", {}) or {}
+        # Two databases on one server are two sources; naming both after the
+        # server alone would collapse them into one card on the canvas.
+        label = details.get("database") or details.get("path") or details.get("server") \
+            or raw.get("datasourceType", "source")
+        card = builder.card(
+            f"src:{datasource_id}",
+            "source",
+            str(label).replace("\\", "/").rstrip("/").rsplit("/", 1)[-1] or str(label),
+            f"{raw.get('datasourceType', 'unknown')} source",
+            " · ".join(str(v) for v in (details.get("server"), details.get("path")) if v),
+        )
+        card.setdefault("untraced", 0)
+        card.setdefault(
+            "untraced_reason",
+            "a tenant scan does not expose source columns — the column grain "
+            "comes from each model's own Power Query",
+        )
+        return card
+
+    # -- dataflows ---------------------------------------------------------
+    dataflow_card: dict[str, str] = {}
+    for workspace in workspaces:
+        workspace_name = workspace.get("name", "")
+        for dataflow in workspace.get("dataflows", []) or []:
+            dataflow_id = str(dataflow.get("objectId") or dataflow.get("id", ""))
+            generation = _dataflow_generation(dataflow)
+            card = builder.card(
+                f"df:{dataflow_id}",
+                "dataflow",
+                dataflow.get("name", ""),
+                f"dataflow {generation}".strip() if generation else "dataflow (generation not stated)",
+                " · ".join(p for p in (workspace_name, dataflow.get("configuredBy", "")) if p),
+            )
+            card["generation"] = generation
+            dataflow_card[dataflow_id] = card["id"]
+            usages = dataflow.get("datasourceUsages", []) or []
+            upstream_cards = [c for c in (source_card(u.get("datasourceInstanceId", "")) for u in usages) if c]
+            for upstream in upstream_cards:
+                builder.link(
+                    upstream["id"], card["id"], "feeds",
+                    "datasourceUsages on the dataflow, as reported by the scan",
+                )
+            for entity in dataflow.get("entities", []) or []:
+                entity_name = entity.get("name", "")
+                attributes = entity.get("attributes", []) or []
+                if attributes:
+                    for attribute in attributes:
+                        builder.field(card, attribute.get("name", ""), "column", table=entity_name)
+                else:
+                    builder.field(card, entity_name, "entity")
+                _trace_dataflow_entity(builder, card, entity, entity_name, upstream_cards)
+
+    # -- semantic models ---------------------------------------------------
+    for workspace in workspaces:
+        workspace_name = workspace.get("name", "")
+        for dataset in workspace.get("datasets", []) or []:
+            dataset_id = str(dataset.get("id", ""))
+            card = builder.card(
+                f"ds:{dataset_id}",
+                "semantic_model",
+                dataset.get("name", ""),
+                "semantic model",
+                " · ".join(
+                    p for p in (workspace_name, dataset.get("targetStorageMode", ""),
+                                dataset.get("configuredBy", "")) if p
+                ),
+            )
+            dataset_card[dataset_id] = card["id"]
+            tables = dataset.get("tables", []) or []
+            for table in tables:
+                for column in table.get("columns", []) or []:
+                    builder.field(card, column.get("name", ""), "column", table=table.get("name", ""))
+                for measure in table.get("measures", []) or []:
+                    builder.field(card, measure.get("name", ""), "measure", table=table.get("name", ""))
+            if not tables:
+                card["untraced"] = 0
+                card["untraced_reason"] = (
+                    "this scan carries no table detail — re-scan with "
+                    "datasetSchema=True&datasetExpressions=True for the column grain"
+                )
+            for usage in dataset.get("datasourceUsages", []) or []:
+                upstream = source_card(usage.get("datasourceInstanceId", ""))
+                if upstream is not None:
+                    builder.link(
+                        upstream["id"], card["id"], "feeds",
+                        "datasourceUsages on the model, as reported by the scan",
+                    )
+            for flow in dataset.get("upstreamDataflows", []) or []:
+                upstream_id = dataflow_card.get(str(flow.get("targetDataflowId", "")))
+                if upstream_id:
+                    builder.link(
+                        upstream_id, card["id"], "feeds",
+                        "upstreamDataflows on the model, as reported by the scan",
+                    )
+
+    # -- chained models, reports and notebooks -----------------------------
+    for workspace in workspaces:
+        workspace_id, workspace_name = str(workspace.get("id", "")), workspace.get("name", "")
+        for dataset in workspace.get("datasets", []) or []:
+            consumer = dataset_card.get(str(dataset.get("id", "")))
+            for upstream in dataset.get("upstreamDatasets", []) or []:
+                producer = dataset_card.get(str(upstream.get("targetDatasetId", "")))
+                if producer and consumer:
+                    builder.link(
+                        producer, consumer, "chained",
+                        "upstreamDatasets — a composite model or DirectQuery over this model",
+                    )
+        for report in workspace.get("reports", []) or []:
+            dataset_id = str(report.get("datasetId", ""))
+            paginated = (report.get("reportType") or "").lower() == "paginatedreport"
+            binding = _report_binding(
+                report, workspace_id,
+                str(report.get("datasetWorkspaceId") or dataset_workspace.get(dataset_id, "")),
+                report_count.get(dataset_id, 0),
+            )
+            card = builder.card(
+                f"rep:{report.get('id','')}",
+                "paginated" if paginated else "report",
+                report.get("name", ""),
+                "paginated report" if paginated else binding.split(" — ")[0],
+                " · ".join(p for p in (workspace_name, binding.split(" — ")[-1]) if p),
+            )
+            card["binding"] = binding
+            card["untraced_reason"] = (
+                "a tenant scan does not carry a report's visuals — open this "
+                "report as a file to get its field-level usage"
+            )
+            producer = dataset_card.get(dataset_id)
+            if producer:
+                builder.link(producer, card["id"], "reads", f"report.datasetId — {binding}")
+        for notebook in workspace.get("notebooks", []) or []:
+            card = builder.card(
+                f"nb:{notebook.get('id','')}", "notebook", notebook.get("name", ""),
+                "notebook", workspace_name,
+            )
+            card["untraced_reason"] = "notebook code is not parsed for column usage"
+            for upstream in notebook.get("upstreamDatasets", []) or []:
+                producer = dataset_card.get(str(upstream.get("targetDatasetId", "")))
+                if producer:
+                    builder.link(producer, card["id"], "reads", "upstreamDatasets on the notebook")
+
+    if infer_names:
+        _link_matching_names(builder)
+    return builder.result()
+
+
+def _trace_dataflow_entity(builder, card, entity, entity_name, upstream_cards) -> None:
+    """A dataflow entity's own M, when the scan carries it, gives real
+    column grain on the leg the scan otherwise reports only at artifact
+    level: warehouse column → entity attribute.
+
+    It is attributed only when the dataflow reads exactly one data source.
+    With two, which source a column came from is a guess, and the leg stays
+    at artifact grain rather than being invented.
+    """
+    from pbi_lineage.mtrace import trace_table  # noqa: PLC0415 — keeps the import graph flat
+
+    code = entity.get("mashupExpression") or entity.get("expression") or ""
+    if not code or len(upstream_cards) != 1:
+        return
+    upstream = upstream_cards[0]
+    trace = trace_table(code, entity_name)
+    source_table = (trace.source_table or entity_name).split(".")[-1]
+    for column_name, origin in trace.columns.items():
+        if not origin.source_column:
+            upstream["untraced"] = upstream.get("untraced", 0) + 1
+            continue
+        source_field = builder.field(upstream, origin.source_column, "column", table=source_table)
+        target = builder.field(card, column_name, "column", table=entity_name)
+        builder.link(
+            source_field, target, origin.derivation,
+            origin.detail or f"traced through the dataflow's own Power Query ({len(origin.steps)} step(s))",
+        )
+
+
+def _link_matching_names(builder: _GraphBuilder) -> None:
+    """Join a dataflow entity attribute to a model column of the same name.
+
+    This is an inference and is labelled as one on every edge it creates.
+    It exists because a tenant scan states artifact lineage only, and a
+    name match is often the answer — but a name match is not evidence, so
+    it is opt-in and never silent.
+    """
+    linked = {(_card_of(e["source"]), _card_of(e["target"])) for e in builder.edges}
+    by_name: dict[str, list[tuple[dict, dict]]] = {}
+    for card in builder.cards.values():
+        for field in card["fields"]:
+            by_name.setdefault(field["name"].lower(), []).append((card, field))
+    for candidates in by_name.values():
+        for producer_card, producer_field in candidates:
+            if producer_card["kind"] != "dataflow":
+                continue
+            for consumer_card, consumer_field in candidates:
+                if consumer_card["kind"] != "semantic_model":
+                    continue
+                if (producer_card["id"], consumer_card["id"]) not in linked:
+                    continue  # only where the scan already says the artifacts are joined
+                builder.link(
+                    producer_field["id"], consumer_field["id"], "inferred",
+                    "inferred from a matching column name — the scan does not state column lineage",
+                )

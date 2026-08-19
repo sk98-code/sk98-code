@@ -63,20 +63,49 @@ The honest limits, and they matter:
   reported as untraced rather than assumed pass-through.
 - Sources that are *other semantic models* (`AnalysisServices.Database`,
   `PowerBI.Datamarts`, DirectQuery on a published model) are labelled as
-  the upstream source and their tables/columns are shown, but the tracer
-  does not yet recurse **into** that model's own partitions to reach its
-  warehouse. That recursion is the remaining gap on this row.
+  the upstream source and their tables/columns are shown. In a **local
+  file** the tracer cannot recurse into that model's own partitions,
+  because the file does not contain them; in a **tenant scan** it does
+  not need to — the other model is a card of its own with its own
+  upstream, and the two are joined by the `upstreamDatasets` lineage the
+  scan declares.
+
+### The estate chain
+
+The tenant canvas (`/api/tenant/lineage/graph`, the **Column Lineage ▸
+Graph — whole tenant** view) draws the chain the way an estate actually
+looks:
+
+    data source → dataflow (Gen1 / Gen2) → semantic model
+                → chained semantic model → report (thin or thick),
+                  paginated report, notebook
+
+with these rules about what is claimed:
+
+| Thing | Where it comes from | Claimed how |
+|---|---|---|
+| Dataflow generation | the scan's `generation` field | `Gen2` when it is 2, `Gen1` when it is 1, **"generation not stated"** when the field is absent — never inferred |
+| source → dataflow, dataflow → model, model → model, model → report | `datasourceUsages`, `upstreamDataflows`, `upstreamDatasets`, `report.datasetId` | declared by the scan; drawn **artifact-to-artifact**, because that is the grain of the evidence |
+| source column → dataflow entity column | the dataflow's own `mashupExpression`, traced by `mtrace` | column grain, and only when the dataflow reads exactly one source — with two, which source a column came from would be a guess |
+| dataflow column → model column | nothing in the scan states it | **opt-in only** (`?infer=true`, a checkbox in the UI): joins columns of the same name, along a leg the scan already declares, and every such edge says "inferred … the scan does not state column lineage" in its own evidence |
+| thin vs thick report | the report's workspace vs its model's, and how many reports share the model | thin when the model is in another workspace or is shared; **"thin or thick not stated by the scan"** for a model with exactly one report, because a scan cannot tell those apart |
+| a report's fields | not in a tenant scan at all | the card says so and points at analyzing the report file |
+
+A card that knows nothing says what it does not know rather than
+rendering empty.
 
 | Feature | Status | Notes |
 |---|---|---|
 | Item-level lineage — data sources view | **Yes** | Source → models → consumers, with source type and downstream counts |
 | Item-level lineage — models/dataflows view | **Yes** | Upstream and downstream at once, cross-workspace dependencies called out |
+| Dataflow Gen1 / Gen2 in the chain | **Yes** (tenant) | Generation from the scan; Gen1, Gen2, or "not stated" — see the estate chain table |
+| Thin vs thick reports in the chain | **Yes** (tenant) | Claimed only where the scan supports it |
 | Column-level lineage — model to visual | **Yes** | Graph + UI tree, both directions |
 | Cross-report lineage | **Yes** | Usage is the union across every parsed report |
 | End-to-end lineage (source → report) | **Yes** | `lineage.py`, "Source → Visual" tab |
 | Export the lineage graph as JSON | **Yes** | `/api/lineage/items` and the JSON export |
 | Column-level lineage — data source to visual | **Yes** (with limits) | Column-grain M tracing, **Column Lineage** tab; joins/pivots/opaque functions reported as *untraced*, never guessed — see the note above |
-| Downstream / composite model tracking | **Partial** | Tracked as a consumer and shown as an upstream source; the tracer does not recurse into the other model's own partitions |
+| Downstream / composite model tracking | **Yes** (tenant) / **Partial** (single file) | In a scan a chained model is its own card joined by `upstreamDatasets`; from one file the other model's partitions are not in the file to recurse into |
 
 ## Detection & analysis
 

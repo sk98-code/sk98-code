@@ -4,7 +4,11 @@ The contract: follow what M actually says, and mark what cannot be followed
 as untraced rather than guessing an origin.
 """
 
-from pbi_lineage.lineage import column_lineage_graph, column_lineage_tree
+from pbi_lineage.lineage import (
+    column_lineage_graph,
+    column_lineage_tree,
+    tenant_lineage_graph,
+)
 from pbi_lineage.mindex import MExpressionIndex
 from pbi_lineage.mtrace import trace_table
 from pbi_lineage.resolve import analyze_model
@@ -301,3 +305,120 @@ def test_a_column_that_could_not_be_traced_is_counted_not_invented():
     assert source["fields"] == []
     assert source["untraced"] == 2
     assert source["untraced_reason"]
+
+
+# ---------------------------------------------------------------------------
+# The estate chain: source → dataflow (Gen1/Gen2) → model → model → report
+# ---------------------------------------------------------------------------
+
+DATAFLOW_M = '''let
+    Source = Sql.Database("dwh", "SalesDW"),
+    nav = Source{[Schema="dbo",Item="FactSales"]}[Data],
+    #"Renamed" = Table.RenameColumns(nav,{{"quantity","Qty"}}),
+    #"Kept" = Table.SelectColumns(#"Renamed", {"Qty","Region"})
+in
+    #"Kept"'''
+
+TENANT_SCAN = {
+    "datasourceInstances": [
+        {"datasourceId": "src-1", "datasourceType": "Sql",
+         "connectionDetails": {"server": "dwh", "database": "SalesDW"}},
+    ],
+    "workspaces": [
+        {
+            "id": "ws-1", "name": "Finance",
+            "dataflows": [
+                {"objectId": "df-1", "name": "Raw", "generation": 1,
+                 "datasourceUsages": [{"datasourceInstanceId": "src-1"}],
+                 "entities": [{"name": "RawSales", "mashupExpression": DATAFLOW_M,
+                               "attributes": [{"name": "Qty"}, {"name": "Region"}]}]},
+                {"objectId": "df-2", "name": "Staging", "generation": 2, "entities": []},
+                {"objectId": "df-3", "name": "Legacy", "entities": []},
+            ],
+            "datasets": [
+                {"id": "ds-1", "name": "Sales Model",
+                 "upstreamDataflows": [{"targetDataflowId": "df-1"}],
+                 "tables": [{"name": "Sales", "columns": [{"name": "Qty"}],
+                             "measures": [{"name": "Total"}]}]},
+            ],
+            "reports": [
+                {"id": "r-1", "name": "Ops", "datasetId": "ds-1"},
+                {"id": "r-2", "name": "Exec", "datasetId": "ds-1"},
+            ],
+        },
+        {
+            "id": "ws-2", "name": "Marketing",
+            "datasets": [
+                {"id": "ds-2", "name": "Sales Extended",
+                 "upstreamDatasets": [{"targetDatasetId": "ds-1"}],
+                 "tables": [{"name": "Ext", "columns": [{"name": "Qty"}]}]},
+            ],
+            "reports": [
+                {"id": "r-3", "name": "Cross", "datasetId": "ds-1", "datasetWorkspaceId": "ws-1"},
+                {"id": "r-4", "name": "Extended View", "datasetId": "ds-2"},
+            ],
+        },
+    ],
+}
+
+
+def _tenant(**kwargs):
+    return tenant_lineage_graph(TENANT_SCAN, **kwargs)
+
+
+def _by_name(graph, name):
+    return next(card for card in graph["nodes"] if card["name"] == name)
+
+
+def test_dataflow_generation_is_reported_not_guessed():
+    graph = _tenant()
+    assert _by_name(graph, "Raw")["badge"] == "dataflow Gen1"
+    assert _by_name(graph, "Staging")["badge"] == "dataflow Gen2"
+    # the scan did not state a generation for this one, so neither do we
+    assert _by_name(graph, "Legacy")["badge"] == "dataflow (generation not stated)"
+
+
+def test_the_chain_runs_source_dataflow_model_model_report():
+    graph = _tenant()
+    lane = {card["name"]: card["lane"] for card in graph["nodes"]}
+    assert lane["SalesDW"] < lane["Raw"] < lane["Sales Model"] < lane["Sales Extended"]
+    assert lane["Sales Extended"] < lane["Extended View"]
+
+    pairs = {(e["source"], e["target"]) for e in graph["edges"]}
+    assert ("src:src-1", "df:df-1") in pairs
+    assert ("df:df-1", "ds:ds-1") in pairs
+    assert ("ds:ds-1", "ds:ds-2") in pairs
+    assert ("ds:ds-2", "rep:r-4") in pairs
+
+
+def test_a_dataflows_own_m_gives_real_column_grain():
+    """Where the scan carries the dataflow's Power Query, the source leg is
+    column-grain rather than artifact-grain."""
+    graph = _tenant()
+    source = _by_name(graph, "SalesDW")
+    assert {f["name"] for f in source["fields"]} == {"quantity", "Region"}
+    hop = next(e for e in graph["edges"] if e["source"].endswith("::column::quantity"))
+    assert hop["target"] == "df:df-1::column::Qty"
+    assert hop["kind"] == "renamed"
+
+
+def test_thin_and_thick_are_claimed_only_where_the_scan_supports_it():
+    graph = _tenant()
+    assert _by_name(graph, "Ops")["badge"] == "thin report"          # shared model
+    assert _by_name(graph, "Cross")["binding"].endswith("another workspace")
+    # one model, one report: the scan cannot tell thin from thick, so no claim
+    assert "not stated" in _by_name(graph, "Extended View")["binding"]
+
+
+def test_name_matching_is_opt_in_and_labels_itself():
+    assert not [e for e in _tenant()["edges"] if e["kind"] == "inferred"]
+    inferred = [e for e in _tenant(infer_names=True)["edges"] if e["kind"] == "inferred"]
+    assert inferred
+    assert all("inferred" in e["evidence"] for e in inferred)
+    # only along a leg the scan itself declares
+    assert all(e["source"].startswith("df:df-1") for e in inferred)
+
+
+def test_artifact_grain_hops_say_where_they_came_from():
+    for edge in _tenant()["edges"]:
+        assert edge["evidence"], edge

@@ -1,5 +1,7 @@
 """Local web UI: API behaviour over a real analysis of a generated project."""
 
+from pathlib import Path
+
 import pytest
 
 pytest.importorskip("fastapi")
@@ -126,6 +128,18 @@ def test_lineage_graph_endpoint(client):
     assert {"semantic_model", "report"} <= kinds
     assert all("fields" in card and "lane" in card for card in body["nodes"])
     assert all(edge["evidence"] for edge in body["edges"])
+
+
+def test_tenant_lineage_graph_endpoint(client, tmp_path):
+    scan = Path("demo_estate/sample_tenant_scan.json")
+    client.post("/api/tenant/load", json={"mode": "replay", "path": str(scan)})
+    body = client.get("/api/tenant/lineage/graph").json()
+    kinds = {card["kind"] for card in body["nodes"]}
+    assert {"source", "dataflow", "semantic_model", "report"} <= kinds
+    assert not [e for e in body["edges"] if e["kind"] == "inferred"]
+
+    inferred = client.get("/api/tenant/lineage/graph", params={"infer": "true"}).json()
+    assert [e for e in inferred["edges"] if e["kind"] == "inferred"]
 
 
 def _labels(node):

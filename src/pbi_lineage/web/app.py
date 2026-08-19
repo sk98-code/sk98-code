@@ -28,6 +28,7 @@ from pbi_lineage.lineage import (
     column_lineage_tree,
     local_item_lineage,
     tenant_item_lineage,
+    tenant_lineage_graph,
 )
 from pbi_lineage.mindex import MExpressionIndex
 from pbi_lineage.persist import ScanBundle, write_json, write_sqlite
@@ -657,6 +658,15 @@ def create_app() -> FastAPI:
             raise HTTPException(404, f"unknown tenant report '{report}'")
         rows = builder()
         return {"report": report, "rows": rows, "total": len(rows)}
+
+    @app.get("/api/tenant/lineage/graph")
+    def tenant_graph(infer: bool = False) -> dict:
+        """The estate as one canvas: data source → dataflow (Gen1/Gen2) →
+        semantic model → chained model → report, paginated report or
+        notebook. `infer=true` adds opt-in, self-labelling name-match links
+        between a dataflow entity attribute and a model column."""
+        state = _tenant()
+        return tenant_lineage_graph(state.scan, infer_names=infer)
 
     @app.get("/api/tenant/lineage/items")
     def tenant_lineage_items(view: str = "sources") -> dict:

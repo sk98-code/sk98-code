@@ -34,7 +34,7 @@ your PATH: `pbi-lineage` and `bimigrate`.
 pytest -q
 ```
 
-Expected: **253 passed**. If that passes, everything is wired correctly.
+Expected: **260 passed**. If that passes, everything is wired correctly.
 
 ## 3. Web UI (sabse aasan tareeka)
 
@@ -50,6 +50,7 @@ File ka path daaliye (`.pbix` ya `.pbip` project folder) aur **Analyze** dabaiye
 - **Dependency tree** — kisi bhi column par click karke poori lineage: column → measure → visual → page → report
 - **Column Lineage** — do views:
   - *Graph* — har artifact ka apna card (source table, dataflow, semantic model, report), har card me apna column search aur paging; column par click kariye to uska poora raasta (upstream + downstream) highlight ho jaata hai
+  - *Graph — whole tenant* — poora estate ek canvas par: data source → dataflow (Gen1/Gen2) → semantic model → chained semantic model → report (thin ya thick) / paginated / notebook. Scan load karne ke baad ye option enable hota hai
   - *Tree* — server → database → schema → table → source column → semantic model → model column → measure/visual
   Dono Power Query ke rename/select/expand/native-SQL steps ke through traced hain
 - **M expressions** — saara Power Query code, upstream source ke saath
