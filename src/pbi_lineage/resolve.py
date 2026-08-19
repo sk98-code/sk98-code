@@ -378,9 +378,23 @@ _SCOPE_EDGE_KIND = {
 }
 
 
+def _hosts_of(model: Model, predicate) -> list[str]:
+    """Which tables hold an object matching `predicate` — the basis for
+    resolving a reference that names no table."""
+    return [table.name for table in model.tables if predicate(table)]
+
+
 def _resolve_field_reference(model: Model, ref: FieldReference, rl_index: dict[str, str]) -> str | None:
-    """FieldReference → target node id, or None when it points at nothing
-    (a broken visual — reported, never guessed)."""
+    """FieldReference → target node id, or None when it points at nothing.
+
+    A reference that names no table is common and resolvable: report
+    filters carry measures unqualified, and hierarchy-level references
+    (`Date Hierarchy.Month`) arrive with the hierarchy alone. Dropping
+    those loses real usage — every column under that hierarchy then reads
+    as unused. They are resolved by name when exactly one object in the
+    model answers to it, and left unresolved when several do: an ambiguous
+    reference is not evidence for any one of them.
+    """
     if ref.kind == RefKind.MEASURE:
         table = model.table(ref.table) if ref.table else None
         if table is not None and any(m.name == ref.name for m in table.measures):
@@ -391,6 +405,7 @@ def _resolve_field_reference(model: Model, ref: FieldReference, rl_index: dict[s
             if any(m.name == ref.name for m in t.measures):
                 return nid_measure(ref.name)
         return None
+
     if ref.kind == RefKind.COLUMN:
         if ref.table:
             table = model.table(ref.table)
@@ -401,14 +416,25 @@ def _resolve_field_reference(model: Model, ref: FieldReference, rl_index: dict[s
                     return nid_measure(ref.name)  # filters sometimes carry measures as Column
             if ref.name in rl_index:
                 return rl_index[ref.name]
-        return None
+            return None
+        # unqualified: a measure name is unique model-wide, so try that first
+        for t in model.tables:
+            if any(m.name == ref.name for m in t.measures):
+                return nid_measure(ref.name)
+        if ref.name in rl_index:
+            return rl_index[ref.name]
+        hosts = _hosts_of(model, lambda t: any(c.name == ref.name for c in t.columns))
+        return nid_column(hosts[0], ref.name) if len(hosts) == 1 else None
+
     if ref.kind == RefKind.HIERARCHY_LEVEL:
         hierarchy_name = ref.name.split(".", 1)[0]
-        if ref.table and model.table(ref.table) is not None:
+        if ref.table:
             table = model.table(ref.table)
-            if any(h.name == hierarchy_name for h in table.hierarchies):
+            if table is not None and any(h.name == hierarchy_name for h in table.hierarchies):
                 return nid_hierarchy(ref.table, hierarchy_name)
-        return None
+            return None
+        hosts = _hosts_of(model, lambda t: any(h.name == hierarchy_name for h in t.hierarchies))
+        return nid_hierarchy(hosts[0], hierarchy_name) if len(hosts) == 1 else None
     return None
 
 

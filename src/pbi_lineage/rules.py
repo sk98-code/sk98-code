@@ -89,17 +89,66 @@ def _implicit_measures(context: EstateContext) -> Iterable[Finding]:
                         )
 
 
+_AUTO_TABLE_PREFIXES = ("LocalDateTable_", "DateTableTemplate_", "NewLocalDateTable_")
+
+
 def _broken_visuals(context: EstateContext) -> Iterable[Finding]:
-    """Visuals referencing a field that no longer exists in the model."""
+    """Visuals referencing a field that is not in the model.
+
+    One finding per distinct field, not per occurrence. The same missing
+    field referenced by four hundred visuals is one thing to fix, and four
+    hundred rows of it buries every other finding in the report — which is
+    what makes a rule engine useless rather than merely noisy.
+
+    Power BI's own auto date/time tables are separated out: a reference to
+    a `LocalDateTable_…` the extractor did not return is a limitation of
+    the read, not a broken report, and telling a user to go fix it wastes
+    their afternoon.
+    """
     if context.analysis is None:
         return
+    grouped: dict[tuple[str, str], list] = {}
     for reference in context.analysis.unresolved:
+        grouped.setdefault((reference.table or "", reference.name), []).append(reference)
+
+    for (table, name), references in sorted(grouped.items()):
+        occurrences = len(references)
+        scopes = sorted({r.scope for r in references})
+        detail = {
+            "occurrences": occurrences,
+            "scopes": scopes,
+            "evidence": references[0].evidence,
+            "more_evidence": [r.evidence for r in references[1:4]],
+        }
+        where = f" in {occurrences} places" if occurrences > 1 else ""
+        if table.startswith(_AUTO_TABLE_PREFIXES):
+            yield Finding(
+                "auto-date-reference",
+                SEVERITY_INFO,
+                f"{table}[{name}]",
+                f"report uses the auto date/time table {table}[{name}]{where}; that table "
+                "was not returned by the model reader, so this is a gap in the read, "
+                "not a broken report",
+                detail,
+            )
+            continue
+        if not table:
+            yield Finding(
+                "unresolved-reference",
+                SEVERITY_WARNING,
+                f"[{name}]",
+                f"report references [{name}]{where} without naming a table, and no single "
+                "model object answers to that name — it may be a visual-internal field or "
+                "an ambiguous name",
+                detail,
+            )
+            continue
         yield Finding(
             "broken-visual-reference",
             SEVERITY_ERROR,
-            f"{reference.table}[{reference.name}]",
-            f"report references {reference.table}[{reference.name}], which is not in the model",
-            {"scope": reference.scope, "evidence": reference.evidence},
+            f"{table}[{name}]",
+            f"report references {table}[{name}]{where}, which is not in the model",
+            detail,
         )
 
 
@@ -312,6 +361,10 @@ def _formatting_hygiene(context: EstateContext) -> Iterable[Finding]:
 DEFAULT_RULES: list[Rule] = [
     Rule("implicit-measure", SEVERITY_WARNING, "Implicit measures in use", _implicit_measures),
     Rule("broken-visual-reference", SEVERITY_ERROR, "Visuals referencing missing fields", _broken_visuals),
+    # `_broken_visuals` also emits `auto-date-reference` and
+    # `unresolved-reference`; they are declared so the UI can name them.
+    Rule("unresolved-reference", SEVERITY_WARNING, "References that name no table", lambda _: ()),
+    Rule("auto-date-reference", SEVERITY_INFO, "Auto date/time table references", lambda _: ()),
     Rule("broken-dax", SEVERITY_ERROR, "DAX referencing deleted objects", _broken_dax),
     Rule("auto-date-table", SEVERITY_WARNING, "Auto date/time tables enabled", _auto_date_tables),
     Rule(

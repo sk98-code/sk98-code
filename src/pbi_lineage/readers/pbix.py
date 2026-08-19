@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import json
 import re
+import struct
 import zipfile
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from pbi_lineage.readers.layout_legacy import parse_layout
 from pbi_lineage.schema import LiveConnection, ReadResult
 
 _ZIP_MAGIC = b"PK\x03\x04"
+_ZIP_EOCD = b"PK\x05\x06"
 _DATASET_ID_RE = re.compile(r"(?i)initial catalog\s*=\s*([^;]+)")
 
 
@@ -85,8 +87,71 @@ def _read_package(
 
     if "DataMashup" in parts:
         result.m_section = _extract_m_section(package.read("DataMashup"), result.warnings)
+        if result.m_section and result.model is not None:
+            _merge_m_section(result.model, result.m_section, result.warnings)
 
     return result
+
+
+_SQL_WRAPPER = re.compile(r"(?is)^\s*select\s+\*\s+from\s*\[[^\]]+\]\s*$")
+
+
+def _is_real_m(partition) -> bool:
+    """Whether a partition's stored expression is actually Power Query.
+
+    In a large class of files it is not: the partition carries the M
+    engine's own wrapper, `SELECT * FROM [Sales]`, and the query itself
+    lives only in the mashup's section document. Treating that wrapper as
+    the query is what makes a model look like it has no data source at
+    all."""
+    expression = (partition.expression or "").strip()
+    if not expression or _SQL_WRAPPER.match(expression):
+        return False
+    return partition.source_type in (None, "m") or "let" in expression.lower()
+
+
+def _merge_m_section(model, section: str, warnings: list[str]) -> None:
+    """Fold the mashup's shared queries into the model.
+
+    A query whose name matches a table supplies that table's partition
+    expression when the partition does not already hold real M. Everything
+    else — parameters, custom functions, staging queries that are not
+    loaded — becomes a shared expression, which is also the only place
+    those appear at all when the extractor cannot read TMSCHEMA_EXPRESSIONS.
+    """
+    from pbi_lineage.readers.msection import parse_section  # noqa: PLC0415 — local format
+    from pbi_lineage.schema import NamedExpression, Partition  # noqa: PLC0415
+
+    try:
+        queries = parse_section(section)
+    except Exception as exc:  # noqa: BLE001 — a malformed section must not abort the read
+        warnings.append(f"DataMashup: section document did not parse: {exc}")
+        return
+
+    by_table = {table.name: table for table in model.tables}
+    known = {expression.name for expression in model.expressions}
+    recovered = 0
+    for query in queries:
+        table = by_table.get(query.name)
+        if table is not None and not query.is_function:
+            partition = next((p for p in table.partitions if not _is_real_m(p)), None)
+            if partition is None and not table.partitions:
+                partition = Partition(name=query.name, source_type="m", mode="import")
+                table.partitions.append(partition)
+            if partition is not None:
+                partition.expression = query.expression
+                partition.source_type = "m"
+                recovered += 1
+                continue
+            if any(_is_real_m(p) for p in table.partitions):
+                continue
+        if query.name not in known:
+            model.expressions.append(NamedExpression(name=query.name, expression=query.expression))
+            known.add(query.name)
+    if recovered:
+        warnings.append(
+            f"recovered Power Query for {recovered} table(s) from the mashup section document"
+        )
 
 
 def _parse_connections(raw: bytes, warnings: list[str]) -> LiveConnection | None:
@@ -119,20 +184,50 @@ def _parse_connections(raw: bytes, warnings: list[str]) -> LiveConnection | None
     return LiveConnection(dataset_id=dataset_id, connection_string=connection_string, raw=connections)
 
 
-def _extract_m_section(raw: bytes, warnings: list[str]) -> str | None:
-    """DataMashup is a length-prefixed container whose first blob is a zip
-    holding Formulas/Section1.m — locate the zip by magic and read it."""
+def _mashup_package(raw: bytes) -> list[bytes]:
+    """Candidate byte ranges for the zip inside a DataMashup container.
+
+    The container is length-prefixed: a 4-byte version, a 4-byte length,
+    then that many bytes of zip, then further length-prefixed sections
+    (permissions, metadata, permission bindings). Handing `zipfile`
+    everything from the zip magic onwards is *not* equivalent: it scans
+    backwards for the end-of-central-directory record and finds a false
+    one in the trailing sections, then reports an archive with no entries
+    and no error. That silently cost every query in the file.
+
+    Ordered most to least trustworthy; the caller takes the first that
+    yields Section1.m.
+    """
+    candidates: list[bytes] = []
+    if len(raw) >= 8:
+        version, length = struct.unpack_from("<II", raw, 0)
+        if version in (0, 1) and 0 < length <= len(raw) - 8 and raw[8:12] == _ZIP_MAGIC:
+            candidates.append(raw[8 : 8 + length])
+
     offset = raw.find(_ZIP_MAGIC)
-    if offset < 0:
+    if offset >= 0:
+        body = raw[offset:]
+        # truncate at the last real end-of-central-directory record
+        end = body.rfind(_ZIP_EOCD)
+        if end >= 0:
+            candidates.append(body[: end + 22])
+        candidates.append(body)
+    return candidates
+
+
+def _extract_m_section(raw: bytes, warnings: list[str]) -> str | None:
+    """Pull `Formulas/Section1.m` out of the nested DataMashup container."""
+    candidates = _mashup_package(raw)
+    if not candidates:
         warnings.append("DataMashup: no embedded zip found")
         return None
-    try:
-        with zipfile.ZipFile(io.BytesIO(raw[offset:])) as mashup:
-            for name in mashup.namelist():
-                if name.endswith("Section1.m"):
-                    return mashup.read(name).decode("utf-8-sig")
-    except zipfile.BadZipFile:
-        warnings.append("DataMashup: embedded zip is unreadable")
-        return None
-    warnings.append("DataMashup: Section1.m not found")
+    for candidate in candidates:
+        try:
+            with zipfile.ZipFile(io.BytesIO(candidate)) as mashup:
+                for name in mashup.namelist():
+                    if name.endswith("Section1.m"):
+                        return mashup.read(name).decode("utf-8-sig")
+        except (zipfile.BadZipFile, OSError, EOFError):
+            continue
+    warnings.append("DataMashup: Section1.m not found in the embedded package")
     return None

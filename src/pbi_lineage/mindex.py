@@ -53,7 +53,31 @@ _SOURCE_FUNCTIONS = (
     "PowerBI.Datamarts",
     "PowerPlatform.Dataflows",
     "Dataflows.Contents",
+    "AnalysisServices.Database",
+    "AnalysisServices.Databases",
+    "OData.Feed",
+    "SharePoint.Tables",
+    "Salesforce.Data",
+    "Salesforce.Reports",
+    "Json.Document",
+    "Xml.Tables",
+    "Access.Database",
+    # Data typed into the report, or pasted in: the rows live in the file
+    # itself. It has no upstream, and saying so is the answer — a table
+    # that simply shows nothing reads as "we could not work it out".
+    "Table.FromRows",
 )
+
+# Sources whose "argument" is embedded data rather than a location.
+_INLINE_DATA_FUNCTIONS = frozenset({"Table.FromRows", "Json.Document"})
+_MAX_ARGUMENT = 200
+
+
+def _ARGUMENT_CAP(argument: str) -> str:  # noqa: N802 — reads as a constant at the call site
+    """No source label should be able to grow without bound: a literal is a
+    server, a path or a query, and a page of text is none of those."""
+    return argument if len(argument) <= _MAX_ARGUMENT else argument[:_MAX_ARGUMENT] + "…"
+
 
 _SOURCE_CALL = re.compile(r"\b(" + "|".join(re.escape(f) for f in _SOURCE_FUNCTIONS) + r")\s*\(([^)]*)\)")
 _NAV_PAIR = re.compile(r'\[\s*Schema\s*=\s*"([^"]+)"\s*,\s*Item\s*=\s*"([^"]+)"\s*\]')
@@ -161,6 +185,13 @@ def parse_m(code: str) -> tuple[list[str], list[MSource]]:
             for argument in match.group(2).split(",")
             if argument.strip() and not argument.strip().startswith("[")
         ]
+        if function in _INLINE_DATA_FUNCTIONS:
+            # Entered/pasted data: the argument is the compressed rows
+            # themselves. Carrying that through would put a kilobyte of
+            # base64 in the source column of the UI.
+            arguments = []
+        else:
+            arguments = [_ARGUMENT_CAP(argument) for argument in arguments]
         schema = item = None
         if index < len(navigations):
             schema, item = navigations[index]

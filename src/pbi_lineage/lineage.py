@@ -62,6 +62,16 @@ def sources_for_table(index: MExpressionIndex, table_name: str) -> list[SourceRe
             continue
         for source in entry.sources:
             label = ".".join(p for p in (source.schema, source.item) if p)
+            if source.function in ("Table.FromRows", "Json.Document") and not source.item:
+                # Data typed or pasted into the report itself. It has no
+                # upstream location, and the honest label says exactly that
+                # rather than leaving the table looking unexplained.
+                label = "Entered data"
+                if label in seen:
+                    continue
+                seen.add(label)
+                refs.append(SourceRef(label=label, system=source.function))
+                continue
             if not label:
                 # A file or web source: the literal argument is a path or URL.
                 # Show its last segment so the column stays readable, and keep
@@ -435,6 +445,21 @@ _SYSTEM_LABELS = {
     "PowerPlatform.Dataflows": "Dataflow",
     "Dataflows.Contents": "Dataflow",
     "PowerBI.Datamarts": "Power BI Datamart",
+    "AnalysisServices.Database": "Analysis Services",
+    "AnalysisServices.Databases": "Analysis Services",
+    "OData.Feed": "OData",
+    "SharePoint.Files": "SharePoint",
+    "SharePoint.Tables": "SharePoint",
+    "Salesforce.Data": "Salesforce",
+    "Salesforce.Reports": "Salesforce",
+    "Access.Database": "Access",
+    "Folder.Files": "Folder",
+    "File.Contents": "File",
+    "AzureStorage.Blobs": "Azure Blob Storage",
+    "AzureStorage.DataLake": "Azure Data Lake",
+    "Json.Document": "JSON",
+    "Xml.Tables": "XML",
+    "Table.FromRows": "Entered data",
 }
 
 

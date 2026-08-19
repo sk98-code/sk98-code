@@ -214,3 +214,114 @@ def test_real_pbix_shape_end_to_end(tmp_path):
     result = read_pbix(path)
     fields = {(r.table, r.name, r.kind) for r in result.report.all_references()}
     assert ("Sales", "Year", RefKind.COLUMN) in fields
+
+
+# ---------------------------------------------------------------------------
+# Regressions found by running the analyzer over Microsoft's own sample .pbix
+# corpus (github.com/microsoft/powerbi-desktop-samples).
+# ---------------------------------------------------------------------------
+
+import io  # noqa: E402
+import struct  # noqa: E402
+import zipfile  # noqa: E402
+
+from pbi_lineage.readers.msection import parse_section, split_section  # noqa: E402
+from pbi_lineage.readers.pbix import _extract_m_section, _mashup_package  # noqa: E402
+
+
+def _mashup_container(section_text: str, *, trailing: bytes = b"") -> bytes:
+    """A DataMashup part the way a real PBIX writes it: a length-prefixed
+    zip followed by further length-prefixed sections."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as package:
+        package.writestr("Config/Package.xml", "<Package/>")
+        package.writestr("Formulas/Section1.m", section_text)
+    body = buffer.getvalue()
+    return struct.pack("<II", 0, len(body)) + body + trailing
+
+
+SECTION = 'section Section1;\n\nshared Sales = let\n    Source = Excel.Workbook(File.Contents("C:\\x.xlsx"))\nin\n    Source;\n'
+
+
+def test_mashup_zip_is_read_by_its_length_not_by_scanning_to_the_end():
+    """The trailing sections contain bytes that `zipfile` mistakes for an
+    end-of-central-directory record; it then reports an archive with no
+    entries and *no error*, which silently costs every query in the file."""
+    trailing = b"PK\x05\x06" + b"\x00" * 40  # a decoy EOCD in the permissions section
+    raw = _mashup_container(SECTION, trailing=trailing)
+
+    naive = raw[raw.find(b"PK\x03\x04") :]
+    with zipfile.ZipFile(io.BytesIO(naive)) as archive:
+        assert archive.namelist() == [], "the decoy must actually fool the naive read"
+
+    warnings: list[str] = []
+    assert _extract_m_section(raw, warnings) is not None
+    assert warnings == []
+
+
+def test_mashup_package_falls_back_when_the_length_prefix_is_absent():
+    raw = _mashup_container(SECTION)[8:]  # a container written without the prefix
+    warnings: list[str] = []
+    assert _extract_m_section(raw, warnings) is not None
+
+
+def test_section_split_ignores_semicolons_inside_strings_and_comments():
+    text = (
+        'section Section1;\n'
+        'shared A = "a;b";\n'
+        '// a comment with ; in it\n'
+        'shared B = 1;\n'
+    )
+    names = [q.name for q in parse_section(text)]
+    assert names == ["A", "B"]
+    assert len(split_section(text)) == 3  # section, A, and B (the comment rides with B)
+
+
+def test_section_parses_quoted_names_parameters_and_functions():
+    text = (
+        'section Section1;\n'
+        'shared #"My Table" = let Source = 1 in Source;\n'
+        'shared FileLocation = "C:\\Data" meta [IsParameterQuery=true];\n'
+        'shared Add = (a, b) => a + b;\n'
+    )
+    queries = {q.name: q for q in parse_section(text)}
+    assert set(queries) == {"My Table", "FileLocation", "Add"}
+    assert queries["FileLocation"].is_parameter
+    assert queries["FileLocation"].expression == '"C:\\Data"', "the meta record is not the value"
+    assert queries["Add"].is_function
+
+
+def test_the_section_document_supplies_power_query_the_partition_lacks():
+    """The partition of such a file holds `SELECT * FROM [Sales]` — the M
+    engine's wrapper, not the query. Treating that as the query is what
+    makes a model look like it has no data source at all."""
+    from pbi_lineage.readers.pbix import _merge_m_section  # noqa: PLC0415
+    from pbi_lineage.schema import Model, Partition, Table  # noqa: PLC0415
+
+    model = Model(
+        name="M",
+        tables=[
+            Table(
+                name="Sales",
+                partitions=[Partition(name="p", source_type="query", expression="SELECT * FROM [Sales]")],
+            )
+        ],
+    )
+    _merge_m_section(model, SECTION + 'shared Param = "x";\n', [])
+    partition = model.tables[0].partitions[0]
+    assert partition.source_type == "m"
+    assert "Excel.Workbook" in partition.expression
+    assert [e.name for e in model.expressions] == ["Param"]
+
+
+def test_a_partition_that_already_holds_real_m_is_not_overwritten():
+    from pbi_lineage.readers.pbix import _merge_m_section  # noqa: PLC0415
+    from pbi_lineage.schema import Model, Partition, Table  # noqa: PLC0415
+
+    real = 'let Source = Sql.Database("a","b") in Source'
+    model = Model(
+        name="M",
+        tables=[Table(name="Sales", partitions=[Partition(name="p", source_type="m", expression=real)])],
+    )
+    _merge_m_section(model, SECTION, [])
+    assert model.tables[0].partitions[0].expression == real

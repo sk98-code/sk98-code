@@ -173,6 +173,12 @@
   .gpager button{padding:1px 8px;font-size:11px}
   .glegend{display:flex;gap:6px;align-items:center;font-size:11px}
   .glegend i{display:inline-block;margin-left:8px}
+  .prow{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:8px;
+    max-width:860px}
+  .prow-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .prow-actions{display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap}
+  .hintcmd{font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:5px;
+    padding:3px 8px;user-select:all}
   #gPath{padding:8px 12px;border-bottom:1px solid var(--line);font-size:12px;
     background:var(--accent-soft);display:none}
   #gPath.on{display:block}
@@ -191,7 +197,8 @@
   <input type="text" id="path" placeholder="Path to a .pbix file or .pbip project folder">
   <input type="text" id="tpath" placeholder="Saved Scanner payload (.json)" hidden>
   <input type="text" id="tact" placeholder="Activity log .json (optional)" hidden>
-  <input type="text" id="ttoken" placeholder="Bearer token (live scan)" hidden>
+  <button id="signIn" hidden>Sign in with browser</button>
+  <span class="muted" id="signInState" hidden></span>
   <select id="tmode" hidden>
     <option value="replay">Replay a saved scan</option>
     <option value="live">Live scan</option>
@@ -204,6 +211,33 @@
   <button id="expDoc" disabled title="Model + report documentation (Markdown)">Docs</button>
   <button id="saveSess" disabled title="Save this analysis so it can be reopened">Save analysis</button>
 </header>
+
+<div id="signInPanel" class="wrap" style="grid-template-columns:1fr" hidden>
+  <div class="panel">
+    <h2>Sign in to the Power BI Service</h2>
+    <div class="pad">
+      <p class="muted" style="margin:0 0 12px;max-width:70ch">
+        The first two use a sign-in you may already have, and need no app
+        registration of your own — the browser prompt is Microsoft's. The token
+        stays inside this process: it is never written to disk, and never sent
+        back to this page.
+      </p>
+      <div id="providerList"><div class="muted">Checking what is available on this machine…</div></div>
+      <details style="margin-top:14px">
+        <summary class="muted" style="cursor:pointer">Advanced — paste a bearer token</summary>
+        <div style="display:flex;gap:8px;margin-top:8px;max-width:760px">
+          <input type="text" id="ttoken" placeholder="Bearer token" style="flex:1">
+          <button id="useToken">Use this token</button>
+        </div>
+        <p class="muted" style="font-size:12px;margin:6px 0 0">
+          It must be issued for <code>https://analysis.windows.net/powerbi/api</code>.
+          Power BI rejects a token minted for any other resource with a 401 that
+          does not say why.
+        </p>
+      </details>
+    </div>
+  </div>
+</div>
 
 <div class="wrap">
   <div>
@@ -497,8 +531,123 @@ function syncServiceInputs(){
   const live = $('#tmode').value === 'live';
   $('#tpath').hidden  = !service || live;
   $('#tact').hidden   = !service || live;
-  $('#ttoken').hidden = !service || !live;
+  $('#signIn').hidden = !service || !live;
+  $('#signInState').hidden = !service || !live;
+  $('#signInPanel').hidden = !(service && live && !signedIn);
+  if(service && live && !providersLoaded) loadProviders();
 }
+
+/* ------------------------------------------------------------- sign-in -- */
+let signedIn = false, providersLoaded = false;
+
+$('#signIn').addEventListener('click', () => {
+  $('#signInPanel').hidden = !$('#signInPanel').hidden;
+  if(!providersLoaded) loadProviders();
+});
+
+const P_STATUS = {
+  ready:         ['ready',         'signed in — a token can be issued right now'],
+  needs_login:   ['needs login',   'installed, but nobody is signed in yet'],
+  not_installed: ['not installed', ''],
+  needs_setup:   ['needs setup',   'usable only after an app registration in Entra'],
+};
+
+async function loadProviders(){
+  providersLoaded = true;
+  const box = $('#providerList');
+  box.innerHTML = '';
+  box.appendChild(el('div','muted','Checking what is available on this machine…'));
+  let body;
+  try{ body = await api('/api/tenant/signin/providers'); }
+  catch(err){ box.innerHTML=''; box.appendChild(el('div','note', err.message)); return; }
+  signedIn = body.signed_in;
+  renderSignedIn(body);
+  box.innerHTML = '';
+  body.providers.forEach(p => box.appendChild(providerRow(p)));
+}
+
+function providerRow(p){
+  const row = el('div','prow');
+  const head = el('div','prow-head');
+  head.appendChild(el('b', null, p.name));
+  const [label, meaning] = P_STATUS[p.status] || [p.status, ''];
+  head.appendChild(el('span','pill ' + (p.status==='ready' ? 's-Used'
+    : p.status==='needs_login' ? 's-indet'
+    : p.status==='needs_setup' ? 's-manual' : 's-extern'), label));
+  if(p.needs_app_registration)
+    head.appendChild(el('span','muted','needs your own Entra app registration'));
+  row.appendChild(head);
+  if(p.detail || meaning) row.appendChild(el('div','muted', p.detail || meaning));
+
+  const actions = el('div','prow-actions');
+  if(p.status === 'ready' && !p.needs_app_registration){
+    actions.appendChild(signInButton(p, false, 'Use this sign-in', true));
+  } else if(p.status === 'needs_login'){
+    actions.appendChild(signInButton(p, true, 'Sign in with browser', true));
+    actions.appendChild(el('code','hintcmd', p.login_hint));
+  } else if(p.status === 'not_installed'){
+    actions.appendChild(el('code','hintcmd', p.install_hint));
+  } else if(p.needs_app_registration){
+    actions.appendChild(el('span','muted',
+      'Run `pbi-lineage tenant --client-id <id> --tenant-id <tenant>` in a terminal: '
+      + 'it prints a code to enter in the browser, saves the scan, and you can replay it here.'));
+  }
+  row.appendChild(actions);
+  return row;
+}
+
+function signInButton(provider, useBrowser, label, primary){
+  const button = el('button', primary ? 'primary' : null, label);
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    const original = button.textContent;
+    button.textContent = useBrowser ? 'Waiting for the browser…' : 'Signing in…';
+    try{
+      const res = await api('/api/tenant/signin', {method:'POST',
+        headers:{'content-type':'application/json'},
+        body: JSON.stringify({provider: provider.id, use_browser: useBrowser})});
+      signedIn = true;
+      renderSignedIn({signed_in:true, account: res.account, provider: res.provider});
+      renderLog(res.log || []);
+      $('#signInPanel').hidden = true;
+    }catch(err){
+      const note = el('div','note', err.message);
+      button.parentElement.appendChild(note);
+    }finally{ button.disabled = false; button.textContent = original; }
+  });
+  return button;
+}
+
+function renderSignedIn(body){
+  const state = $('#signInState');
+  if(body.signed_in){
+    state.textContent = 'signed in' + (body.account ? ` · ${body.account}` : '')
+      + (body.provider ? ` (${body.provider})` : '');
+    state.style.color = 'var(--used)';
+    $('#signIn').textContent = 'Sign out';
+    $('#signIn').onclick = async () => {
+      await api('/api/tenant/signout', {method:'POST'});
+      signedIn = false; providersLoaded = false;
+      renderSignedIn({signed_in:false});
+      syncServiceInputs();
+    };
+  } else {
+    state.textContent = 'not signed in';
+    state.style.color = '';
+    $('#signIn').textContent = 'Sign in with browser';
+    $('#signIn').onclick = () => {
+      $('#signInPanel').hidden = !$('#signInPanel').hidden;
+      if(!providersLoaded) loadProviders();
+    };
+  }
+}
+
+$('#useToken').addEventListener('click', () => {
+  if(!$('#ttoken').value.trim()) return;
+  signedIn = true;
+  renderSignedIn({signed_in:true, account:'pasted token', provider:'manual'});
+  $('#signInPanel').hidden = true;
+});
 
 /* ------------------------------------------------------------- analyze -- */
 $('#run').addEventListener('click', run);

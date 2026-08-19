@@ -88,6 +88,11 @@ class TenantSession:
     refreshables: list = field(default_factory=list)
     bundles: list = field(default_factory=list)
     log: list[dict] = field(default_factory=list)
+    # A token held only in memory for this process. It is never written to
+    # disk and never returned by any endpoint.
+    access_token: str = field(default="", repr=False)
+    account: str = ""
+    signed_in_with: str = ""
 
     @property
     def loaded(self) -> bool:
@@ -565,7 +570,9 @@ def create_app() -> FastAPI:
         """Load a tenant either by replaying a saved Scanner payload or by
         running a live scan. Replay exists because a scan is expensive and
         because an analysis should be reviewable offline and shareable."""
+        signed_in_token, signed_in_with, account = tenant.access_token, tenant.signed_in_with, tenant.account
         tenant.__init__()  # reset
+        tenant.access_token, tenant.signed_in_with, tenant.account = signed_in_token, signed_in_with, account
         if payload.mode == "replay":
             path = Path(payload.path.strip().strip('"').strip("'")).expanduser()
             if not path.exists():
@@ -586,17 +593,17 @@ def create_app() -> FastAPI:
             tenant.source = str(path)
             tenant.mode = "replay"
         else:
-            if not payload.token:
+            token = payload.token or signed_in_token
+            if not token:
                 raise HTTPException(
                     400,
-                    "A live scan needs a bearer token. Get one with `az account get-access-token "
-                    "--resource https://analysis.windows.net/powerbi/api`, or run "
-                    "`pbi-lineage tenant` with a service principal and replay the saved payload.",
+                    "Not signed in. Use Sign in with browser, or paste a bearer token under "
+                    "Advanced.",
                 )
             from pbi_lineage.service.rest import HttpxTransport, RestClient, StaticToken, TokenBucket
             from pbi_lineage.service.scanner import ScannerClient
 
-            client = RestClient(HttpxTransport(), StaticToken(payload.token), bucket=TokenBucket(500, 3600.0))
+            client = RestClient(HttpxTransport(), StaticToken(token), bucket=TokenBucket(500, 3600.0))
             out_dir = Path.home() / ".pbi_lineage" / "scan"
             scanner = ScannerClient(client, out_dir)
             ok, message = scanner.preflight()
@@ -618,6 +625,55 @@ def create_app() -> FastAPI:
         tenant.note(f"{len(workspaces)} workspace(s) loaded")
         return {"ok": True, "log": tenant.log, "summary": governance.tenant_summary(tenant.scan).as_dict()}
 
+    class SignInIn(BaseModel):
+        provider: str = ""
+        # true: run the provider's own login command, which opens the
+        # browser. false: reuse a session the user already has.
+        use_browser: bool = False
+
+    @app.get("/api/tenant/signin/providers")
+    def signin_providers() -> dict:
+        """Which sign-in routes exist on this machine, and what each needs."""
+        from pbi_lineage.service import signin  # noqa: PLC0415 — spawns probes
+
+        return {
+            "providers": [vars(provider) for provider in signin.discover_providers()],
+            "signed_in": bool(tenant.access_token),
+            "account": tenant.account,
+            "provider": tenant.signed_in_with,
+        }
+
+    @app.post("/api/tenant/signin")
+    def signin_start(payload: SignInIn) -> dict:
+        """Sign in through the browser and keep the resulting token in memory.
+
+        The token is never returned to the page and never written to disk:
+        the browser only ever learns *that* a sign-in succeeded and which
+        account it was for.
+        """
+        from pbi_lineage.service import signin  # noqa: PLC0415
+
+        result = (
+            signin.begin_browser_login(payload.provider)
+            if payload.use_browser
+            else signin.token_from(payload.provider)
+        )
+        if not result.ok:
+            tenant.note(f"Sign-in failed ({payload.provider}): {result.error}", "error")
+            raise HTTPException(400, f"{result.error}. {result.hint}".strip())
+        tenant.access_token = result.token
+        tenant.account = result.account
+        tenant.signed_in_with = result.provider
+        tenant.note(f"Signed in with {result.provider}" + (f" as {result.account}" if result.account else ""))
+        return {"ok": True, "provider": result.provider, "account": result.account, "log": tenant.log}
+
+    @app.post("/api/tenant/signout")
+    def signout() -> dict:
+        tenant.access_token = ""
+        tenant.account = ""
+        tenant.signed_in_with = ""
+        return {"ok": True}
+
     def _tenant() -> TenantSession:
         if not tenant.loaded:
             raise HTTPException(400, "no tenant scan loaded")
@@ -631,6 +687,9 @@ def create_app() -> FastAPI:
             "source": tenant.source,
             "log": tenant.log,
             "summary": governance.tenant_summary(tenant.scan).as_dict() if tenant.loaded else None,
+            "signed_in": bool(tenant.access_token),
+            "account": tenant.account,
+            "provider": tenant.signed_in_with,
         }
 
     @app.get("/api/tenant/{report}")
