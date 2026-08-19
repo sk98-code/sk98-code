@@ -252,6 +252,9 @@ class Resolution:
     wildcard_measures: bool = False
 
 
+_AUTO_DATE_PREFIXES = ("LocalDateTable_", "DateTableTemplate_", "NewLocalDateTable_")
+
+
 def resolve_refs(analysis: DaxAnalysis, model: Model, *, host_table: str | None = None) -> Resolution:
     """Settle extracted references against the model.
 
@@ -294,7 +297,20 @@ def resolve_refs(analysis: DaxAnalysis, model: Model, *, host_table: str | None 
             elif ref.name in measures_by_name:
                 emit(ResolvedRef("measure", measures_by_name[ref.name], ref.name))
             else:
-                result.unknown.append(ref)
+                # A bare `[Month]` in a measure is most often a column the
+                # author left unqualified. Resolve it when exactly one
+                # authored table has that name; ambiguity, or a name only
+                # Power BI's hidden date tables carry, stays unknown.
+                hosts = [
+                    table.name
+                    for table in model.tables
+                    if not table.name.startswith(_AUTO_DATE_PREFIXES)
+                    and any(c.name == ref.name for c in table.columns)
+                ]
+                if len(hosts) == 1:
+                    emit(ResolvedRef("column", hosts[0], ref.name))
+                else:
+                    result.unknown.append(ref)
 
     for name in analysis.tables:
         table = model.table(name)

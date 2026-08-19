@@ -483,3 +483,95 @@ def test_a_protection_reason_is_never_dropped_for_a_consumer_sentence():
     ]
     assert "sortByColumn" in verdict.reasons[0]
     assert any("shown in" in reason for reason in verdict.reasons)
+
+
+# ---------------------------------------------------------------------------
+# Findings that a person can act on
+# ---------------------------------------------------------------------------
+
+from pbi_lineage.mindex import MExpressionIndex  # noqa: E402
+from pbi_lineage.rules import EstateContext, run_rules  # noqa: E402
+
+
+def _findings(model, reports):
+    index = MExpressionIndex()
+    index.add_model(model)
+    return run_rules(
+        EstateContext(model=model, analysis=analyze_model(model, reports), reports=reports, m_index=index)
+    )
+
+
+def test_one_finding_per_missing_field_not_per_occurrence():
+    """The same missing field in four hundred visuals is one thing to fix."""
+    model = Model(name="M", tables=[Table(name="Sales", columns=[Column(name="Qty")])])
+    refs = [_ref("Gone", table="Sales") for _ in range(40)]
+    broken = [f for f in _findings(model, [_report(refs)]) if f.rule_id == "broken-visual-reference"]
+    assert len(broken) == 1
+    assert "40 places" in broken[0].message
+    assert broken[0].detail["occurrences"] == 40
+
+
+def test_a_reference_to_an_auto_date_table_is_not_reported_as_broken():
+    model = Model(name="M", tables=[Table(name="Sales", columns=[Column(name="Qty")])])
+    findings = _findings(model, [_report([_ref("Date", table="LocalDateTable_abc")])])
+    kinds = {f.rule_id for f in findings}
+    assert "auto-date-reference" in kinds
+    assert "broken-visual-reference" not in kinds
+
+
+def test_generated_calculated_columns_do_not_raise_errors_nobody_can_fix():
+    """Power BI wrote both the column and the column it reads; what is
+    missing is a row the extractor did not return."""
+    model = Model(
+        name="M",
+        tables=[
+            Table(
+                name="LocalDateTable_abc",
+                columns=[Column(name="Year", expression="YEAR([Date])")],
+            )
+        ],
+    )
+    findings = _findings(model, [])
+    assert not [f for f in findings if f.rule_id == "broken-dax"]
+    info = [f for f in findings if f.rule_id == "auto-date-reference"]
+    assert info and "gap in the read" in info[0].message
+
+
+def test_a_bare_column_reference_in_dax_resolves_when_it_is_unambiguous():
+    from pbi_lineage import dax  # noqa: PLC0415
+
+    model = Model(
+        name="M",
+        tables=[
+            Table(name="Calendar", columns=[Column(name="Month")]),
+            Table(name="LocalDateTable_abc", columns=[Column(name="Month")]),
+        ],
+    )
+    resolution = dax.resolve_refs(dax.analyze("SUM([Month])"), model)
+    assert not resolution.unknown
+    assert ("column", "Calendar", "Month") in [(r.kind, r.table, r.name) for r in resolution.refs]
+
+
+def test_a_bare_column_reference_stays_unknown_when_two_authored_tables_have_it():
+    from pbi_lineage import dax  # noqa: PLC0415
+
+    model = Model(
+        name="M",
+        tables=[
+            Table(name="A", columns=[Column(name="Month")]),
+            Table(name="B", columns=[Column(name="Month")]),
+        ],
+    )
+    resolution = dax.resolve_refs(dax.analyze("SUM([Month])"), model)
+    assert [r.name for r in resolution.unknown] == ["Month"]
+
+
+def test_an_implicit_measure_finding_names_the_visual_and_says_it_once():
+    model = Model(
+        name="M",
+        tables=[Table(name="Sales", columns=[Column(name="Qty", summarize_by="sum")])],
+    )
+    report = _report([_ref("Qty", table="Sales"), _ref("Qty", table="Sales")], title="Revenue")
+    implicit = [f for f in _findings(model, [report]) if f.rule_id == "implicit-measure"]
+    assert len(implicit) == 1
+    assert 'the barChart “Revenue” on page “Overview”' in implicit[0].message

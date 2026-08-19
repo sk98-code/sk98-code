@@ -70,6 +70,7 @@ def _implicit_measures(context: EstateContext) -> Iterable[Finding]:
         for table in context.model.tables
         for column in table.columns
     }
+    seen: set = set()
     for report in context.reports:
         for page in report.pages:
             for visual in page.visuals:
@@ -78,18 +79,29 @@ def _implicit_measures(context: EstateContext) -> Iterable[Finding]:
                         continue
                     key = (reference.table or "", reference.name)
                     behaviour = summarize.get(key)
-                    if behaviour and behaviour not in ("none", ""):
-                        yield Finding(
-                            "implicit-measure",
-                            SEVERITY_WARNING,
-                            nid_column(key[0], key[1]),
-                            f"{key[0]}[{key[1]}] is aggregated implicitly ({behaviour}) in "
-                            f"visual {visual.name or visual.visual_type}",
-                            {"report": report.name, "page": page.name, "summarize_by": behaviour},
-                        )
+                    if not behaviour or behaviour in ("none", ""):
+                        continue
+                    where = _visual_label(visual)
+                    if (key, where, page.name) in seen:
+                        continue  # one column, one visual, one finding
+                    seen.add((key, where, page.name))
+                    yield Finding(
+                        "implicit-measure",
+                        SEVERITY_WARNING,
+                        nid_column(key[0], key[1]),
+                        f"{key[0]}[{key[1]}] is aggregated implicitly ({behaviour}) in "
+                        f"the {where} on page “{page.name}”",
+                        {"report": report.name, "page": page.name, "summarize_by": behaviour},
+                    )
 
 
 _AUTO_TABLE_PREFIXES = ("LocalDateTable_", "DateTableTemplate_", "NewLocalDateTable_")
+
+
+def _visual_label(visual) -> str:
+    """A visual named the way its author would recognise it."""
+    kind = visual.visual_type or "visual"
+    return f"{kind} “{visual.title}”" if getattr(visual, "title", None) else kind
 
 
 def _broken_visuals(context: EstateContext) -> Iterable[Finding]:
@@ -167,6 +179,7 @@ def _broken_dax(context: EstateContext) -> Iterable[Finding]:
                     f"measure [{measure.name}] references unknown " f"{unknown.table or ''}[{unknown.name}]",
                     {"table": table.name},
                 )
+        generated = table.name.startswith(_AUTO_TABLE_PREFIXES)
         for column in table.columns:
             if not column.expression:
                 continue
@@ -174,6 +187,21 @@ def _broken_dax(context: EstateContext) -> Iterable[Finding]:
                 dax.analyze(column.expression), context.model, host_table=table.name
             )
             for unknown in resolution.unknown:
+                if generated:
+                    # Power BI wrote this column and the column it reads;
+                    # what is missing is a row the extractor did not return.
+                    # Nobody can act on it, and as an error it crowds out
+                    # the findings that are the user's to fix.
+                    yield Finding(
+                        "auto-date-reference",
+                        SEVERITY_INFO,
+                        nid_column(table.name, column.name),
+                        f"the generated column {table.name}[{column.name}] reads "
+                        f"{unknown.table or ''}[{unknown.name}], which the model reader did not "
+                        "return — a gap in the read, not a broken model",
+                        {"table": table.name},
+                    )
+                    continue
                 yield Finding(
                     "broken-dax",
                     SEVERITY_ERROR,

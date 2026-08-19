@@ -187,12 +187,18 @@ def create_app() -> FastAPI:
         )
         for disagreement in analysis.disagreements:
             session.note(f"cross-check: {disagreement.object_id}: {disagreement.detail}", "warn")
-        for reference in analysis.unresolved[:50]:
-            session.note(
-                f"Reference skipped: {reference.table}[{reference.name}] is not in the model "
-                f"({reference.scope})",
-                "warn",
-            )
+        # One line per distinct missing field, not per occurrence. The same
+        # field referenced thirty times is one thing to look at, and thirty
+        # identical lines push everything else out of the log.
+        grouped: dict[str, list] = {}
+        for reference in analysis.unresolved:
+            grouped.setdefault(f"{reference.table or '(no table)'}[{reference.name}]", []).append(reference)
+        for label, references in sorted(grouped.items())[:25]:
+            scopes = ", ".join(sorted({r.scope for r in references}))
+            times = f" ×{len(references)}" if len(references) > 1 else ""
+            session.note(f"Reference not resolved: {label}{times} — {scopes}", "warn")
+        if len(grouped) > 25:
+            session.note(f"…and {len(grouped) - 25} more unresolved reference(s)", "warn")
 
         session.duration_s = round(time.perf_counter() - started, 1)
         session.note(f"Execution duration: {session.duration_s} s")
