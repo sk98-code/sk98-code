@@ -142,6 +142,29 @@ def test_tenant_lineage_graph_endpoint(client, tmp_path):
     assert [e for e in inferred["edges"] if e["kind"] == "inferred"]
 
 
+def test_signin_providers_never_returns_a_server_error(client, monkeypatch):
+    """This endpoint probes the machine by running other programs, so it
+    has more ways to fail than most. A 500 replaces the whole sign-in panel
+    with "Internal Server Error" and tells the user nothing."""
+    from pbi_lineage.service import signin
+
+    monkeypatch.setattr(
+        signin, "discover_providers", lambda: (_ for _ in ()).throw(OSError(193, "not a valid app"))
+    )
+    response = client.get("/api/tenant/signin/providers")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["providers"] == []
+    assert "not a valid app" in body["probe_error"]
+
+
+def test_signin_providers_lists_what_it_found(client):
+    body = client.get("/api/tenant/signin/providers").json()
+    assert not body["probe_error"]
+    assert {p["id"] for p in body["providers"]} >= {"azure-cli", "powerbi-powershell", "msal-device-code"}
+    assert body["signed_in"] is False
+
+
 def _labels(node):
     out = [node["label"]]
     for child in node["children"]:

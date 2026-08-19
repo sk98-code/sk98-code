@@ -25,6 +25,7 @@ the most common way a tool of this kind wastes someone's afternoon.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess  # noqa: S404 — invoking the user's own signed-in CLI is the point
 from dataclasses import dataclass, field
@@ -38,6 +39,7 @@ READY = "ready"  # signed in; a token can be had right now
 NEEDS_LOGIN = "needs_login"  # installed, but nobody is signed in
 NOT_INSTALLED = "not_installed"
 NEEDS_SETUP = "needs_setup"  # usable, but only after work in the Entra portal
+UNKNOWN = "unknown"  # the probe itself could not answer
 
 
 @dataclass
@@ -63,10 +65,40 @@ class TokenResult:
     hint: str = ""
 
 
+def _launch(command: list[str]) -> list[str]:
+    """The argv that actually starts this program.
+
+    On Windows the Azure CLI is `az.cmd`, a batch file. `CreateProcess`
+    cannot start one, so a bare `subprocess.run(["…/az.cmd"])` raises
+    WinError 193 — which is how probing for the Azure CLI turned into an
+    Internal Server Error on the machine that had it installed. Batch files
+    go through the command interpreter.
+    """
+    if os.name == "nt" and command and command[0].lower().endswith((".cmd", ".bat")):
+        return ["cmd.exe", "/c", *command]
+    return command
+
+
 def _run(command: list[str], timeout: float = 120.0) -> subprocess.CompletedProcess:
-    return subprocess.run(  # noqa: S603 — fixed argv, no shell
-        command, capture_output=True, text=True, timeout=timeout, check=False
-    )
+    """Run a probe. Never raises.
+
+    Every failure here is information about the environment, not a fault:
+    the tool is missing, it hung, the machine refused to start it. A probe
+    that raises takes out the whole sign-in page and tells the user
+    nothing, which is exactly what it did.
+    """
+    try:
+        return subprocess.run(  # noqa: S603 — fixed argv, no shell
+            _launch(command), capture_output=True, text=True, timeout=timeout, check=False
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            command, 1, "", f"timed out after {timeout:.0f}s"
+        )
+    except OSError as exc:  # not executable, not found, blocked by policy
+        return subprocess.CompletedProcess(command, 1, "", f"could not be started: {exc}")
+    except Exception as exc:  # noqa: BLE001 — a probe must not take down the page
+        return subprocess.CompletedProcess(command, 1, "", f"probe failed: {exc}")
 
 
 def _powershell() -> str | None:
@@ -152,7 +184,7 @@ def powerbi_powershell_provider() -> Provider:
             "no PowerShell on PATH",
             install_hint="install PowerShell 7 from https://aka.ms/powershell",
         )
-    probe = _run([shell, "-NoProfile", "-Command", _PBI_PROBE_SCRIPT], timeout=60)
+    probe = _run([shell, "-NoProfile", "-Command", _PBI_PROBE_SCRIPT], timeout=180)
     if "installed" not in probe.stdout:
         return Provider(
             "powerbi-powershell",
@@ -161,7 +193,7 @@ def powerbi_powershell_provider() -> Provider:
             "the MicrosoftPowerBIMgmt module is not installed",
             install_hint="Install-Module -Name MicrosoftPowerBIMgmt -Scope CurrentUser",
         )
-    result = _run([shell, "-NoProfile", "-Command", _PBI_TOKEN_SCRIPT], timeout=60)
+    result = _run([shell, "-NoProfile", "-Command", _PBI_TOKEN_SCRIPT], timeout=120)
     if result.returncode != 0 or not result.stdout.strip():
         return Provider(
             "powerbi-powershell",
@@ -266,7 +298,10 @@ def discover_providers() -> list[Provider]:
     registration when they are already signed in to the Azure CLI, is the
     difference between this working and it not.
     """
-    providers = [powerbi_powershell_provider(), azure_cli_provider()]
+    providers = [
+        _safe_probe(powerbi_powershell_provider, "powerbi-powershell", "Power BI PowerShell"),
+        _safe_probe(azure_cli_provider, "azure-cli", "Azure CLI"),
+    ]
     providers.append(
         Provider(
             "msal-device-code",
@@ -279,8 +314,16 @@ def discover_providers() -> list[Provider]:
             needs_app_registration=True,
         )
     )
-    order = {READY: 0, NEEDS_LOGIN: 1, NOT_INSTALLED: 2, NEEDS_SETUP: 3}
+    order = {READY: 0, NEEDS_LOGIN: 1, UNKNOWN: 2, NOT_INSTALLED: 3, NEEDS_SETUP: 4}
     return sorted(providers, key=lambda p: (p.needs_app_registration, order.get(p.status, 4)))
+
+
+def _safe_probe(probe, provider_id: str, name: str) -> Provider:
+    """One provider failing to answer must not blank out the others."""
+    try:
+        return probe()
+    except Exception as exc:  # noqa: BLE001 — see _run
+        return Provider(provider_id, name, UNKNOWN, f"could not check this machine: {exc}")
 
 
 def _first_line(text: str) -> str:

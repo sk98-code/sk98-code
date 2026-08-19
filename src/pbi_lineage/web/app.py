@@ -645,11 +645,25 @@ def create_app() -> FastAPI:
 
     @app.get("/api/tenant/signin/providers")
     def signin_providers() -> dict:
-        """Which sign-in routes exist on this machine, and what each needs."""
+        """Which sign-in routes exist on this machine, and what each needs.
+
+        This probes the machine by running other programs, so it has more
+        ways to fail than most endpoints — and a 500 here replaces the
+        whole sign-in page with "Internal Server Error", which helps
+        nobody. It always answers; a probe that could not run says so.
+        """
         from pbi_lineage.service import signin  # noqa: PLC0415 — spawns probes
 
+        try:
+            providers = [vars(provider) for provider in signin.discover_providers()]
+            probe_error = ""
+        except Exception as exc:  # noqa: BLE001 — never blank the page
+            traceback.print_exc()
+            providers, probe_error = [], f"{type(exc).__name__}: {exc}"
+            tenant.note(f"Sign-in probe failed: {probe_error}", "error")
         return {
-            "providers": [vars(provider) for provider in signin.discover_providers()],
+            "providers": providers,
+            "probe_error": probe_error,
             "signed_in": bool(tenant.access_token),
             "account": tenant.account,
             "provider": tenant.signed_in_with,

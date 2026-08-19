@@ -126,3 +126,68 @@ def test_a_token_is_never_in_a_repr():
     """A bearer token in a traceback or a log line is a leaked credential."""
     result = signin.TokenResult(True, token="secret-token-value", provider="azure-cli")
     assert "secret-token-value" not in repr(result)
+
+
+# ---------------------------------------------------------------------------
+# A probe is not allowed to take down the page
+# ---------------------------------------------------------------------------
+
+
+def test_a_probe_that_times_out_does_not_raise(monkeypatch):
+    """`Get-Module -ListAvailable` scans every module path and is genuinely
+    slow the first time. A TimeoutExpired escaping the probe is what turned
+    the sign-in page into "Internal Server Error"."""
+
+    def explode(command, timeout=120.0, **_):
+        raise subprocess.TimeoutExpired(command, timeout)
+
+    monkeypatch.setattr(signin.subprocess, "run", explode)
+    result = signin._run(["anything"], timeout=5)
+    assert result.returncode == 1
+    assert "timed out" in result.stderr
+
+
+def test_a_program_the_os_refuses_to_start_does_not_raise(monkeypatch):
+    """WinError 193: CreateProcess cannot start a batch file."""
+
+    def explode(command, **_):
+        raise OSError(193, "%1 is not a valid Win32 application")
+
+    monkeypatch.setattr(signin.subprocess, "run", explode)
+    result = signin._run(["az.cmd", "account", "show"])
+    assert result.returncode == 1
+    assert "could not be started" in result.stderr
+
+
+def test_a_batch_file_is_launched_through_the_command_interpreter(monkeypatch):
+    """On Windows the Azure CLI *is* `az.cmd`."""
+    monkeypatch.setattr(signin.os, "name", "nt")
+    assert signin._launch([r"C:\\az\\az.cmd", "account"]) == ["cmd.exe", "/c", r"C:\\az\\az.cmd", "account"]
+    assert signin._launch([r"C:\\py\\python.exe", "-V"]) == [r"C:\\py\\python.exe", "-V"]
+
+
+def test_a_batch_file_is_not_wrapped_off_windows(monkeypatch):
+    monkeypatch.setattr(signin.os, "name", "posix")
+    assert signin._launch(["/usr/bin/az.cmd"]) == ["/usr/bin/az.cmd"]
+
+
+def test_one_broken_probe_does_not_blank_out_the_others(monkeypatch):
+    def explode():
+        raise RuntimeError("the machine said no")
+
+    monkeypatch.setattr(signin, "powerbi_powershell_provider", explode)
+    monkeypatch.setattr(
+        signin, "azure_cli_provider", lambda: signin.Provider("azure-cli", "Azure CLI", signin.READY)
+    )
+    providers = {p.id: p for p in signin.discover_providers()}
+    assert providers["azure-cli"].status == signin.READY
+    assert providers["powerbi-powershell"].status == signin.UNKNOWN
+    assert "the machine said no" in providers["powerbi-powershell"].detail
+
+
+def test_a_probe_that_cannot_answer_is_not_reported_as_not_installed():
+    """"not installed" is a claim about the machine. "could not check" is
+    a claim about the probe, and only one of them is true here."""
+    provider = signin._safe_probe(lambda: 1 / 0, "azure-cli", "Azure CLI")
+    assert provider.status == signin.UNKNOWN
+    assert provider.status != signin.NOT_INSTALLED
