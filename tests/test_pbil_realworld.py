@@ -575,3 +575,68 @@ def test_an_implicit_measure_finding_names_the_visual_and_says_it_once():
     implicit = [f for f in _findings(model, [report]) if f.rule_id == "implicit-measure"]
     assert len(implicit) == 1
     assert 'the barChart “Revenue” on page “Overview”' in implicit[0].message
+
+
+# ---------------------------------------------------------------------------
+# The model-read completeness gate
+# ---------------------------------------------------------------------------
+
+from pbi_lineage.removal import plan_removal  # noqa: E402
+
+
+def _partial_model():
+    """A model whose reader returned Sales but not the Budget table the
+    report also uses — what the offline extractor really does."""
+    return Model(name="M", tables=[Table(name="Sales", columns=[Column(name="Qty"), Column(name="Spare")])])
+
+
+def test_a_table_the_report_uses_but_the_reader_missed_is_recorded():
+    result = analyze_model(_partial_model(), [_report([_ref("Amount", table="Budget")])])
+    assert result.missing_tables == ["Budget"]
+    assert not result.model_read_complete
+
+
+def test_auto_date_tables_do_not_count_as_an_incomplete_read():
+    """Their absence says nothing about whether the authored model was read
+    whole, and the user cannot act on it either way."""
+    result = analyze_model(_partial_model(), [_report([_ref("Date", table="LocalDateTable_abc")])])
+    assert result.missing_tables == []
+    assert result.model_read_complete
+
+
+def test_removal_is_blocked_while_the_model_is_only_partly_read():
+    """A missing table takes its measures and their DAX with it, so whatever
+    those consumed reads as unused. Scripting a delete off that is the
+    mistake this tool exists to prevent."""
+    model = _partial_model()
+    result = analyze_model(model, [_report([_ref("Qty", table="Sales"), _ref("Amount", table="Budget")])])
+    spare = nid_column("Sales", "Spare")
+    assert result.verdicts[spare].status == STATUS_UNUSED
+
+    plan = plan_removal(
+        result.graph, result.verdicts, [spare], model=model, missing_tables=result.missing_tables
+    )
+    assert plan.blocked
+    assert any("not read whole" in reason for reason in plan.block_reasons)
+
+
+def test_removal_proceeds_when_the_model_was_read_whole():
+    model = _partial_model()
+    result = analyze_model(model, [_report([_ref("Qty", table="Sales")])])
+    plan = plan_removal(
+        result.graph,
+        result.verdicts,
+        [nid_column("Sales", "Spare")],
+        model=model,
+        missing_tables=result.missing_tables,
+    )
+    assert not plan.blocked
+
+
+def test_the_incomplete_read_outranks_everything_else_in_the_findings():
+    model = _partial_model()
+    findings = _findings(model, [_report([_ref("Amount", table="Budget")])])
+    incomplete = [f for f in findings if f.rule_id == "incomplete-model-read"]
+    assert len(incomplete) == 1
+    assert "Budget" in incomplete[0].message
+    assert "partial read" in incomplete[0].message

@@ -96,9 +96,25 @@ def plan_removal(
     *,
     model: Model,
     size_report: SizeReport | None = None,
+    missing_tables: list[str] | None = None,
 ) -> RemovalPlan:
     plan = RemovalPlan(database=model.name, targets=[], blocked=False)
     target_set = set(target_ids)
+
+    # ---- the model has to have been read whole ---------------------------
+    # A table the report references but the reader never returned takes its
+    # measures and their DAX with it, so whatever those consumed looks
+    # unused. Scripting a delete off that is exactly the mistake this tool
+    # exists to prevent — a hard block, not a warning (spec §5.4.4).
+    if missing_tables:
+        plan.blocked = True
+        shown = ", ".join(missing_tables[:5])
+        more = f" and {len(missing_tables) - 5} more" if len(missing_tables) > 5 else ""
+        plan.block_reasons.append(
+            f"the model was not read whole: {len(missing_tables)} referenced table(s) are "
+            f"missing ({shown}{more}). Usage computed from a partial model cannot justify a "
+            "deletion — read the model through live Desktop mode (M2) and try again"
+        )
 
     # ---- eligibility: only exactly-Unused objects are scriptable ---------
     for node_id in target_ids:

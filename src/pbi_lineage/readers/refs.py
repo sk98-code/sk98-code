@@ -60,12 +60,28 @@ def collect_aliases(node: Any, aliases: dict[str, str] | None = None) -> dict[st
     return aliases
 
 
+# Expression wrappers whose `Property` names a value the *query* produces,
+# not a column of the model.
+_QUERY_INTERNAL = (
+    # the output columns of a visual-level analytics transform — forecast,
+    # clustering, high/low point. They look like columns but exist only
+    # inside the visual.
+    "TransformTableRef",
+    # the projection of an inner query. The model references it really
+    # depends on are inside that query's own From and Select, which the
+    # scan reaches by recursion — emitting the outer name as well invents
+    # a column called `V1` that no model has.
+    "Subquery",
+)
+
+
 def is_transform_output(expression: Any) -> bool:
-    """True for `TransformTableRef` expressions — the output columns of a
-    visual-level analytics transform (forecast, clustering, …). They look
-    like columns but exist only inside the visual, so they are never model
-    references and must not be reported as broken ones."""
-    return isinstance(expression, dict) and "TransformTableRef" in expression
+    """True when this expression's `Property` is query-internal.
+
+    Such a name is never a model reference, so reporting it as one — or as
+    a *broken* one — is noise the reader cannot act on.
+    """
+    return isinstance(expression, dict) and any(key in expression for key in _QUERY_INTERNAL)
 
 
 def _resolve_source(expression: Any, aliases: dict[str, str]) -> str | None:

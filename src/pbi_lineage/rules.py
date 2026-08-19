@@ -104,6 +104,29 @@ def _visual_label(visual) -> str:
     return f"{kind} “{visual.title}”" if getattr(visual, "title", None) else kind
 
 
+def _incomplete_model_read(context: EstateContext) -> Iterable[Finding]:
+    """Tables the report uses that the model reader never returned.
+
+    This outranks every other finding on the page. A missing table takes
+    its measures and their DAX with it, so whatever those measures consumed
+    reads as unused — which is the one mistake that makes a tool like this
+    dangerous rather than merely wrong.
+    """
+    if context.analysis is None or context.analysis.model_read_complete:
+        return
+    for table in context.analysis.missing_tables:
+        yield Finding(
+            "incomplete-model-read",
+            SEVERITY_ERROR,
+            nid_table(table),
+            f"the report uses table “{table}”, which the model reader did not return — "
+            "usage and Unused verdicts for this model are computed from a partial read, "
+            "and removal is blocked until it can be read whole (live Desktop mode reads "
+            "what the offline extractor cannot)",
+            {"missing_table": table},
+        )
+
+
 def _broken_visuals(context: EstateContext) -> Iterable[Finding]:
     """Visuals referencing a field that is not in the model.
 
@@ -387,6 +410,12 @@ def _formatting_hygiene(context: EstateContext) -> Iterable[Finding]:
 
 
 DEFAULT_RULES: list[Rule] = [
+    Rule(
+        "incomplete-model-read",
+        SEVERITY_ERROR,
+        "The model was not read whole",
+        _incomplete_model_read,
+    ),
     Rule("implicit-measure", SEVERITY_WARNING, "Implicit measures in use", _implicit_measures),
     Rule("broken-visual-reference", SEVERITY_ERROR, "Visuals referencing missing fields", _broken_visuals),
     # `_broken_visuals` also emits `auto-date-reference` and

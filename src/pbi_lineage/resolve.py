@@ -88,6 +88,14 @@ class AnalysisResult:
     disagreements: list[Disagreement] = field(default_factory=list)
     unresolved: list[FieldReference] = field(default_factory=list)  # broken visual refs etc.
     warnings: list[str] = field(default_factory=list)
+    # Tables the report references that the model reader did not return.
+    # Their absence is a gap in the read, not a broken report — and while
+    # it stands, no Unused verdict on this model is safe to act on.
+    missing_tables: list[str] = field(default_factory=list)
+
+    @property
+    def model_read_complete(self) -> bool:
+        return not self.missing_tables
 
     def verdict_for(self, object_id: str) -> UsageVerdict | None:
         return self.verdicts.get(object_id)
@@ -399,6 +407,31 @@ def _hosts_of(model: Model, predicate) -> list[str]:
     return authored or hosts
 
 
+def _record_missing_tables(model: Model, result: AnalysisResult) -> None:
+    """Tables the report names that the model does not contain.
+
+    The extractor does not always return the whole model — a table, or a
+    table's columns, can simply be absent. That matters far beyond a
+    "broken reference": a measure the reader missed takes its DAX with it,
+    so the columns that measure aggregates look unused. An `Unused` verdict
+    computed from a partial model is not a fact, and the removal planner
+    treats this as a hard block rather than a warning.
+
+    Auto date/time tables are excluded: those are Power BI's own, the user
+    cannot act on them, and their absence tells us nothing about whether
+    the authored model was read whole.
+    """
+    known = {table.name for table in model.tables}
+    missing = {
+        reference.table
+        for reference in result.unresolved
+        if reference.table
+        and reference.table not in known
+        and not reference.table.startswith(_AUTO_DATE_PREFIXES)
+    }
+    result.missing_tables = sorted(missing)
+
+
 def _usage_reasons(graph: DependencyGraph, node_id: str, protected: list[str]) -> list[str]:
     """Why this object counts as used, named the way a person would say it.
 
@@ -701,6 +734,7 @@ def analyze_model(
         if node_id in graph.nodes:
             graph.mark_root(node_id, reasons[0])
 
+    _record_missing_tables(model, result)
     reached = graph.reachable()
 
     def verdict(node_id: str, kind: str, table: str | None, name: str, is_hidden: bool) -> UsageVerdict:

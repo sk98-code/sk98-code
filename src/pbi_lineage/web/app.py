@@ -321,7 +321,13 @@ def create_app() -> FastAPI:
         targets = payload.get("objects") or []
         if not targets:
             raise HTTPException(400, "no objects selected")
-        plan = plan_removal(bundle.analysis.graph, bundle.analysis.verdicts, targets, model=bundle.model)
+        plan = plan_removal(
+            bundle.analysis.graph,
+            bundle.analysis.verdicts,
+            targets,
+            model=bundle.model,
+            missing_tables=bundle.analysis.missing_tables,
+        )
         return {
             "blocked": plan.blocked,
             "block_reasons": plan.block_reasons,
@@ -834,6 +840,11 @@ def _summary(session: Session) -> dict:
         "model": model.name,
         "source": session.source_path,
         "duration_s": session.duration_s,
+        # Loudest thing on the page when it is true: every Unused verdict
+        # below was computed from a model the reader could not read whole.
+        "model_read_complete": bundle.analysis.model_read_complete,
+        "missing_tables": bundle.analysis.missing_tables[:12],
+        "missing_table_count": len(bundle.analysis.missing_tables),
         "tables": len(model.tables),
         "columns": {"total": total_columns, "unused": unused_columns},
         "measures": {"total": count("measure"), "unused": count("measure", STATUS_UNUSED)},

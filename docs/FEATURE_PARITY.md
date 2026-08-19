@@ -107,6 +107,38 @@ rendering empty.
 | Column-level lineage — data source to visual | **Yes** (with limits) | Column-grain M tracing, **Column Lineage** tab; joins/pivots/opaque functions reported as *untraced*, never guessed — see the note above |
 | Downstream / composite model tracking | **Yes** (tenant) / **Partial** (single file) | In a scan a chained model is its own card joined by `upstreamDatasets`; from one file the other model's partitions are not in the file to recurse into |
 
+## Tested against real files
+
+The engine is run over the published Microsoft sample corpus
+(`github.com/microsoft/powerbi-desktop-samples`, 50 `.pbix` files) with
+`scripts/check_corpus.py`. That is where the following were found, none of
+which a unit test would have caught:
+
+| What was wrong | What it cost |
+|---|---|
+| The `DataMashup` container was read past its length prefix, so `zipfile` found a false end-of-central-directory record and returned an empty archive **with no error** | every query in half the corpus |
+| `Formulas/Section1.m` was extracted and then never used, while the partition held only the M engine's `SELECT * FROM [T]` wrapper | those models had no data source at all: source lineage went from 15 of 43 files to 41 |
+| References naming no table, or a table that is not in the model, were dropped rather than resolved | 67 objects across the corpus were reported **Unused** while in use |
+| The rule engine emitted one finding per occurrence | 10,790 findings, 870 of them one sentence repeated |
+| A `Subquery` projection was read as a model column | hundreds of references to columns called `V1`, `V2`, … that no model has |
+
+Current corpus run: **50 analyzed, 0 failed**, 48 with source lineage,
+2,425 findings (from 10,790).
+
+### The read-completeness gate
+
+The offline extractor does not always return the whole model — a table can
+simply be absent. That matters more than it sounds: a missing table takes
+its measures and their DAX with it, so whatever those measures consumed
+reads as unused.
+
+So when the report references a table the model does not contain, the
+analysis records it, the summary says so **above** the unused count it
+invalidates, and `plan_removal` **blocks** — a hard gate in code, the same
+treatment §5.4.4 gives incomplete report coverage. Power BI's own auto
+date/time tables are excluded: the user cannot act on them, and their
+absence says nothing about whether the authored model was read whole.
+
 ## Detection & analysis
 
 | Feature | Status | Notes |

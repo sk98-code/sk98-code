@@ -179,7 +179,13 @@ def removal_plan(path: str, objects: tuple[str, ...], out: str | None) -> None:
             target_ids.append(nid_column(table, column.rstrip("]")))
         else:
             target_ids.append(nid_measure(reference.strip("[]")))
-    plan = plan_removal(bundle.analysis.graph, bundle.analysis.verdicts, target_ids, model=bundle.model)
+    plan = plan_removal(
+        bundle.analysis.graph,
+        bundle.analysis.verdicts,
+        target_ids,
+        model=bundle.model,
+        missing_tables=bundle.analysis.missing_tables,
+    )
     click.echo(plan.summary())
     if plan.blocked:
         click.secho("\nno script emitted — resolve the blockers first", fg="red")

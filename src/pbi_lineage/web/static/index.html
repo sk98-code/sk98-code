@@ -120,6 +120,10 @@
   .sev-warning{color:var(--warn);font-weight:600}
   .sev-info{color:var(--muted)}
   .empty{padding:28px 14px;text-align:center;color:var(--muted)}
+  .alarm{border:1px solid var(--err);background:var(--unused-bg);border-radius:7px;
+    padding:9px 11px;margin-bottom:12px;font-size:12px;line-height:1.5}
+  .alarm b{display:block;color:var(--err);font-size:13px;margin-bottom:3px}
+  .alarm .mono{margin-top:5px;color:var(--muted);word-break:break-word;font-size:11px}
   .bar{height:6px;background:var(--line);border-radius:4px;overflow:hidden;margin-top:8px}
   .bar i{display:block;height:100%;background:var(--accent)}
   .note{font-size:12px;color:var(--muted);padding:8px 12px;border-top:1px solid var(--line)}
@@ -697,6 +701,23 @@ function renderLog(rows){
 
 function renderSummary(s){
   const box = $('#summary'); box.innerHTML = '';
+
+  /* This has to come before the number it invalidates. Every Unused
+     verdict below was computed from a model the reader could not read
+     whole — a missing table takes its measures and their DAX with it, so
+     whatever those consumed looks unused. */
+  if(s.model_read_complete === false){
+    const warn = el('div','alarm');
+    warn.appendChild(el('b', null, 'The model was not read whole'));
+    warn.appendChild(el('div', null,
+      `${s.missing_table_count} table${s.missing_table_count===1?'':'s'} the report uses `
+      + 'did not come back from the model reader, so the Unused counts below are not '
+      + 'safe to act on. Removal is blocked. Live Desktop mode reads what the offline '
+      + 'extractor cannot.'));
+    warn.appendChild(el('div','mono', (s.missing_tables||[]).join(', ')));
+    box.appendChild(warn);
+  }
+
   const head = el('div','headline', s.columns.unused + ' unused columns');
   head.appendChild(el('small', null,
     `${s.unused_pct}% of ${s.columns.total} · model "${s.model}" · ${s.duration_s}s`));

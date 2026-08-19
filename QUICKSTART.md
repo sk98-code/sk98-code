@@ -38,7 +38,7 @@ your PATH: `pbi-lineage` and `bimigrate`.
 pytest -q
 ```
 
-Expected: **260 passed**. If that passes, everything is wired correctly.
+Expected: **296 passed**. If that passes, everything is wired correctly.
 
 ## 3. Web UI (sabse aasan tareeka)
 
@@ -157,6 +157,17 @@ Switch the header dropdown to **Power BI Service**, keep the mode on
 *Replay a saved scan*, and point it at `demo_estate/sample_tenant_scan.json`.
 The **Column Lineage** tab then offers *Graph — whole tenant*: source →
 dataflow (Gen1/Gen2) → semantic model → chained model → report.
+
+### Check it against a corpus of real files
+
+```bash
+git clone --depth 1 https://github.com/microsoft/powerbi-desktop-samples
+python scripts/check_corpus.py powerbi-desktop-samples
+```
+
+Runs the whole pipeline over every `.pbix` it finds and prints what came
+out, per file and in total. This is how the reader bugs were found — the
+unit tests all passed while half the corpus produced no lineage at all.
 
 ## 5. Run the migration tool (optional)
 
