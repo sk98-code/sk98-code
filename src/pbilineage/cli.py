@@ -121,6 +121,85 @@ def demo(out: str) -> None:
 
 @main.command()
 @click.option("--env-file", default=".env", show_default=True)
+@click.option(
+    "--workspace",
+    "workspaces",
+    multiple=True,
+    required=True,
+    help="workspace id to sample (repeatable; one is usually enough)",
+)
+@click.option("--out", default="out/lineage/capture.json", show_default=True)
+@click.option(
+    "--scrub/--no-scrub",
+    default=True,
+    show_default=True,
+    help="pseudonymize names, servers, emails and GUIDs (keys and API vocabulary are kept)",
+)
+@click.option("--no-export-probe", is_flag=True, help="skip the report Export endpoint probe")
+def capture(env_file: str, workspaces: tuple[str, ...], out: str, scrub: bool, no_export_probe: bool) -> None:
+    """Capture a redacted bundle showing how this tenant's APIs answer.
+
+    Produces one JSON file that records the *shape* of the Scanner API result,
+    the DMV columns, and how the Export endpoints respond — with names,
+    servers, emails and GUIDs pseudonymized, and descriptions dropped. JSON
+    keys and Microsoft's own vocabulary are preserved, because those are the
+    contract the parsers are written against.
+
+    Read the file before sharing it. --no-scrub keeps real values and should
+    only be used against a tenant whose contents you may disclose.
+    """
+    from pbilineage.auth.credentials import ClientCredentialProvider
+    from pbilineage.clients.admin_api import PowerBIAdminClient
+    from pbilineage.clients.xmla import XmlaClient
+    from pbilineage.diagnostics import capture_bundle
+
+    settings = Settings.load(env_file)
+    if not settings.has_credentials:
+        raise click.ClickException(
+            f"missing service-principal configuration: {', '.join(settings.missing())}. "
+            "Copy .env.example to .env and fill it in."
+        )
+
+    admin = PowerBIAdminClient(settings, ClientCredentialProvider(settings))
+    xmla = XmlaClient(settings=settings)
+    with console.status("capturing..."):
+        bundle = capture_bundle(
+            admin,
+            settings,
+            list(workspaces),
+            xmla=xmla,
+            include_export_probe=not no_export_probe,
+            scrub=scrub,
+        )
+
+    path = Path(out)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(bundle, indent=2, default=str), encoding="utf-8")
+
+    table = Table(title="capture", header_style="bold")
+    table.add_column("section")
+    table.add_column("result", overflow="fold")
+    for name, section in bundle["sections"].items():
+        if isinstance(section, dict) and section.get("error"):
+            summary = f"[red]{section['error']}[/]"
+        elif isinstance(section, dict) and section.get("skipped"):
+            summary = f"[yellow]skipped:[/] {section['skipped']}"
+        else:
+            summary = "[green]captured[/]"
+        table.add_row(name, summary)
+    console.print(table)
+
+    if scrub:
+        counts = ", ".join(f"{kind}={count}" for kind, count in bundle["redactions"].items())
+        console.print(f"redacted: {counts or 'nothing matched'}")
+    else:
+        console.print("[red]NOT scrubbed — this file contains real tenant values[/]")
+    console.print(f"wrote [bold]{path}[/]")
+    console.print("[dim]Review the file before sharing it.[/]")
+
+
+@main.command()
+@click.option("--env-file", default=".env", show_default=True)
 @click.option("--incremental", is_flag=True, help="only re-scan workspaces changed since last run")
 @click.option("--workspace", "workspaces", multiple=True, help="scan only these workspace ids")
 @click.option("--out", default="", help="graph output path (default: PBI_GRAPH_PATH)")

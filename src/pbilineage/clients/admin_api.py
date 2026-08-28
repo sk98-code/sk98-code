@@ -264,6 +264,41 @@ class PowerBIAdminClient:
         path.write_bytes(content)
         return path
 
+    def probe_export(self, workspace_id: str, report_id: str) -> dict[str, Any]:
+        """Report how each export endpoint answers, without downloading a PBIX.
+
+        The admin export surface varies between deployments, so this records
+        the status code and the response's top-level keys for both endpoints.
+        It deliberately returns no response bodies: a PBIX is the report.
+        """
+        probes: dict[str, Any] = {}
+        endpoints = {
+            "admin_async": ("POST", f"admin/workspaces/{workspace_id}/reports/{report_id}/Export"),
+            "in_group_sync": ("GET", f"groups/{workspace_id}/reports/{report_id}/Export"),
+        }
+        for label, (method, path) in endpoints.items():
+            try:
+                response = self._send(method, path, body={} if method == "POST" else None, accept_json=False)
+            except ApiError as exc:
+                probes[label] = {"error": str(exc), "status": exc.status}
+                continue
+
+            probe: dict[str, Any] = {
+                "status": response.status,
+                "content_type": response.header("Content-Type"),
+                "body_bytes": len(response.body),
+                "looks_like_pbix": response.body[:2] == b"PK",
+            }
+            try:
+                payload = response.json()
+                if isinstance(payload, dict):
+                    probe["response_keys"] = sorted(payload)
+                    probe["status_field"] = payload.get("status")
+            except ApiError:
+                pass  # a binary body is a valid answer here, not a failure
+            probes[label] = probe
+        return probes
+
     def _export_report_async(self, workspace_id: str, report_id: str, sleep) -> bytes | None:
         try:
             response = self._send(

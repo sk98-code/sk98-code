@@ -65,6 +65,42 @@ separately:
   (Viewer is enough for read), the workspace must be on Premium/PPU/Fabric
   capacity, and the capacity's XMLA endpoint must be set to Read or Read Write.
 
+## Capturing a redacted API sample
+
+`pbilineage capture` records how *your* tenant answers, in a form that is safe
+to share when someone needs to check the tool's reading of the API contract:
+
+```bash
+pbilineage capture --workspace <workspace-id> --out capture.json
+```
+
+It collects the raw Scanner API result, what the normalizer made of it, the DMV
+column names and a few sample rows, and how both report-export endpoints
+respond (status codes and response keys only — never a PBIX body).
+
+Redaction is structure-preserving. **Kept**, because they are the contract:
+every JSON key, Microsoft's own vocabulary (`columnType: "Calculated"`,
+`datasourceType: "Sql"`, `state: "Active"`), and the structure of M and DAX —
+function calls, step order, argument shapes. **Replaced**, consistently, so
+cross-references still resolve: object names, servers, databases, emails and
+GUIDs. Descriptions are dropped outright rather than pseudonymized.
+
+```
+let
+    Source = Sql.Database("Host1", "Database1"),
+    Name50 = Source{[Schema="Name34",Item="Name3"]}[Name35],
+    #"Name36" = Table.SelectColumns(Name50, {"Name4", "Name5", "Name37"}),
+    #"Name39" = Table.RenameColumns(#"Name36", {{"Name37", "Name7"}})
+in
+    #"Name39"
+```
+
+Expression text is rewritten structurally, not by substring replacement — the
+capture is regression-tested to leak nothing from the demo estate and to parse
+into exactly the same steps before and after redaction. `--no-scrub` keeps real
+values, for a tenant whose contents you may disclose. Either way, read the file
+before you share it.
+
 ## The key design choice: one interface, two implementations
 
 A workspace has an XMLA endpoint only if it sits on Premium, PPU or Fabric
@@ -170,6 +206,7 @@ high-fan-out node cannot freeze the canvas.
 ```
 pbilineage doctor                      check config, credentials and optional deps
 pbilineage demo                        build the synthetic tenant graph (no network)
+pbilineage capture --workspace ID      redacted sample of how this tenant's APIs answer
 pbilineage scan [--incremental]        full or incremental tenant scan
 pbilineage serve [--neo4j]             run the API (and the UI, if built)
 pbilineage push                        load a scanned graph into Neo4j
