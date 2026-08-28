@@ -25,8 +25,20 @@ agents = ["anthropic>=0.40"]
 web = ["fastapi>=0.110", "uvicorn>=0.29", "python-multipart>=0.0.9"]
 dev = ["pytest>=8.0", "ruff>=0.4", "black>=24.0", "httpx>=0.27"]
 
+# --- pbilineage extras -------------------------------------------------------
+# The core package runs on the standard library plus pydantic: it can parse
+# DAX/M/PBIX layouts and build a graph with nothing else installed. Each extra
+# turns on one live surface.
+api = ["fastapi>=0.110", "uvicorn>=0.29"]
+live = ["msal>=1.28"]                       # certificate auth + token caching
+xmla = ["pyadomd>=0.1.1"]                   # DMV path; needs .NET + ADOMD.NET
+neo4j = ["neo4j>=5.19"]                     # graph store at tenant scale
+sql = ["sqlglot>=25.0"]                     # phase 4: source SQL column lineage
+lineage = ["fastapi>=0.110", "uvicorn>=0.29", "msal>=1.28", "neo4j>=5.19"]
+
 [project.scripts]
 bimigrate = "bimigrate.cli:main"
+pbilineage = "pbilineage.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -34,6 +46,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 "bimigrate.kb" = ["data/*.json"]
 "bimigrate.web" = ["static/*.html", "static/dist/*", "static/dist/assets/*"]
+"pbilineage.web" = ["dist/*", "dist/assets/*"]
 
 [tool.ruff]
 line-length = 110

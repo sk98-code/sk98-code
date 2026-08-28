@@ -7,4 +7,5 @@ out/
 dist/
 build/
 .venv/
-webui/node_modules/
+node_modules/
+.env

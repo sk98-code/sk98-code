@@ -1,3 +1,7 @@
+> This repository holds two tools. **bimigrate** (below) migrates *into* Power BI.
+> **pbilineage** traces column-level lineage *inside* a Power BI / Fabric tenant —
+> see [README-pbilineage.md](README-pbilineage.md).
+
 # bimigrate — Unified BI Migration Platform
 
 Agent-assisted migration of **Tableau, Spotfire, QlikView and Qlik Sense** estates to
