@@ -48,19 +48,29 @@ does the part that needs no secrets:
 The site loads the synthetic demo tenant on arrival, so the link is useful to
 someone who has not scanned anything yet.
 
-### Enabling it
+### Enabling it — one manual step, required
 
 `.github/workflows/pages.yml` builds and deploys on every push that touches the
-UI or the package. One manual step is needed first, because a workflow cannot
-grant itself Pages:
+UI or the package, but it **cannot turn Pages on for you**. Creating a Pages
+site needs repository admin, and the workflow token does not have it — the API
+answers `Resource not accessible by integration`, with or without the action's
+`enablement` option. So do this once:
 
-> **Settings → Pages → Build and deployment → Source: GitHub Actions**
+> **Settings → Pages → Build and deployment → Source: *GitHub Actions***
+>
+> <https://github.com/sk98-code/sk98-code/settings/pages>
 
-The site then publishes to `https://<owner>.github.io/<repo>/`. The workflow
-runs the Python graph/parser tests and the UI's own test suite before it
-builds, so a broken pipeline does not ship a viewer for itself. It also
-regenerates the bundled demo graph from the current code, which means the demo
-can never drift from the parsers.
+Until then the workflow fails on purpose at its "Check that Pages is enabled"
+step, with a link to that page — a silent skip would hide the fact that nothing
+deployed. The build itself still runs and **attaches the finished site as the
+`lineage-viewer-site` artifact**, so the output is never lost to a settings
+flag. Once Pages is on, re-run the workflow and it publishes to
+`https://<owner>.github.io/<repo>/`.
+
+The workflow runs the Python graph/parser tests and the UI's own test suite
+before it builds, so a broken pipeline does not ship a viewer for itself. It
+also regenerates the bundled demo graph from the current code, which means the
+demo can never drift from the parsers.
 
 To build the static bundle yourself:
 

@@ -76,13 +76,33 @@ jobs:
           OUT_DIR: ../dist-pages
         run: npm run build
 
-      - uses: actions/configure-pages@v5
+      # Keep the built site retrievable even when the deploy below cannot
+      # run, so a blocked Pages setting never costs you the build output.
+      - name: Upload the built site as a downloadable artifact
+        uses: actions/upload-artifact@v4
         with:
-          # Create the Pages site if it does not exist yet, so the first
-          # deploy does not require a manual visit to Settings. If the token
-          # is not permitted to enable Pages, this still fails with a clear
-          # message and the one-time toggle is documented in the README.
-          enablement: true
+          name: lineage-viewer-site
+          path: dist-pages
+          retention-days: 14
+
+      # Turning Pages on requires repository admin, which the workflow token
+      # does not have: `enablement: true` fails with "Resource not accessible
+      # by integration". So check first and say exactly what to do, rather
+      # than failing inside an action with a less specific message.
+      - name: Check that Pages is enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh api "repos/${{ github.repository }}/pages" >/dev/null 2>&1; then
+            echo "::error title=GitHub Pages is not enabled for this repository::\
+          Enable it once at https://github.com/${{ github.repository }}/settings/pages \
+          — set 'Build and deployment' → Source to 'GitHub Actions', then re-run this \
+          workflow. The built site from this run is attached as the \
+          'lineage-viewer-site' artifact in the meantime."
+            exit 1
+          fi
+
+      - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
         with:
