@@ -9,10 +9,12 @@ import ReactFlow, {
 } from "reactflow";
 import "reactflow/dist/style.css";
 
-import { expandNode, getLineage, getNode, getStats, getWarnings } from "./api";
+import { autoDetectClient, loadBundledGraph, loadGraphFile } from "./graph/client";
+import { ClientProvider } from "./graph/ClientContext";
 import LineageNodeCard from "./components/LineageNode";
 import DetailPanel from "./components/DetailPanel";
 import SearchPanel from "./components/SearchPanel";
+import SourceBar from "./components/SourceBar";
 import { layoutNodes } from "./layout";
 import { CONFIDENCE, confidenceStyle, kindStyle } from "./theme";
 
@@ -22,7 +24,17 @@ const nodeTypes = { lineage: LineageNodeCard };
 // nobody; cap it and say so rather than freezing the view.
 const EXPAND_LIMIT = 25;
 
+// Vite rewrites this for the hosted build, where the app is served from a
+// subpath rather than the domain root.
+const DEMO_URL = `${import.meta.env.BASE_URL}demo-graph.json`;
+
+// Injected by vite.config: true for the GitHub Pages bundle, which has no
+// server to talk to. Declared here so the reference is obvious.
+/* global __STATIC_BUILD__ */
+
 export default function App() {
+  const [client, setClient] = useState(null);
+  const [booting, setBooting] = useState(true);
   const [rootId, setRootId] = useState("");
   const [direction, setDirection] = useState("both");
   const [depth, setDepth] = useState(3);
@@ -42,20 +54,78 @@ export default function App() {
   const [flowNodes, setFlowNodes, onNodesChange] = useNodesState([]);
   const [flowEdges, setFlowEdges, onEdgesChange] = useEdgesState([]);
 
-  useEffect(() => {
-    getStats().then(setStats).catch((exc) => setError(exc.message));
-    getWarnings()
-      .then((payload) => setWarnings(payload.warnings))
-      .catch(() => setWarnings([]));
+  // -- choosing a data source ----------------------------------------------
+  const adopt = useCallback((next) => {
+    setClient(next);
+    setRootId("");
+    setBase({ nodes: [], edges: [], meta: {} });
+    setExpansions({});
+    setSelected(null);
+    setError("");
+    setNotice("");
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    autoDetectClient(DEMO_URL, { preferApi: !__STATIC_BUILD__ })
+      .then((detected) => !cancelled && adopt(detected))
+      .catch((exc) => !cancelled && setError(exc.message))
+      .finally(() => !cancelled && setBooting(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [adopt]);
+
+  const openFile = useCallback(
+    async (file) => {
+      setBooting(true);
+      try {
+        adopt(await loadGraphFile(file));
+      } catch (exc) {
+        setError(exc.message);
+      } finally {
+        setBooting(false);
+      }
+    },
+    [adopt]
+  );
+
+  const openDemo = useCallback(async () => {
+    setBooting(true);
+    try {
+      adopt(await loadBundledGraph(DEMO_URL, "Demo tenant"));
+    } catch (exc) {
+      setError(exc.message);
+    } finally {
+      setBooting(false);
+    }
+  }, [adopt]);
+
+  // -- graph data -----------------------------------------------------------
+  useEffect(() => {
+    if (!client) return;
+    let cancelled = false;
+    client
+      .stats()
+      .then((result) => !cancelled && setStats(result))
+      .catch((exc) => !cancelled && setError(exc.message));
+    client
+      .warnings()
+      .then((payload) => !cancelled && setWarnings(payload.warnings || []))
+      .catch(() => !cancelled && setWarnings([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [client]);
 
   // Reload the base subgraph whenever the focus or the controls change.
   useEffect(() => {
-    if (!rootId) return undefined;
+    if (!client || !rootId) return undefined;
     let cancelled = false;
     setLoading(true);
     setError("");
-    getLineage(rootId, direction, depth, minConfidence)
+    client
+      .lineage(rootId, direction, depth, minConfidence)
       .then((payload) => {
         if (cancelled) return;
         setBase(payload);
@@ -69,14 +139,15 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [rootId, direction, depth, minConfidence]);
+  }, [client, rootId, direction, depth, minConfidence]);
 
   useEffect(() => {
-    if (!rootId) return;
-    getNode(rootId)
+    if (!client || !rootId) return;
+    client
+      .node(rootId)
       .then((payload) => setSelected(payload.node))
       .catch(() => setSelected(null));
-  }, [rootId]);
+  }, [client, rootId]);
 
   // Merge the base subgraph with everything the user has expanded.
   const merged = useMemo(() => {
@@ -145,7 +216,10 @@ export default function App() {
             strokeWidth: isContainment ? 1 : 1.8,
             strokeDasharray: isContainment ? "1 4" : style.dash,
           },
-          markerEnd: { type: MarkerType.ArrowClosed, color: isContainment ? "#cbd5e1" : style.color },
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            color: isContainment ? "#cbd5e1" : style.color,
+          },
           data: edge,
         };
       })
@@ -163,7 +237,7 @@ export default function App() {
         return;
       }
       try {
-        const payload = await expandNode(nodeId, showContainment);
+        const payload = await client.expand(nodeId, showContainment);
         const known = new Set(merged.nodes.map((node) => node.id));
         const fresh = payload.nodes.filter((node) => !known.has(node.id));
         if (fresh.length > EXPAND_LIMIT) {
@@ -190,7 +264,7 @@ export default function App() {
         setError(exc.message);
       }
     },
-    [expansions, merged.nodes, showContainment]
+    [client, expansions, merged.nodes, showContainment]
   );
 
   const onNodeClick = useCallback(
@@ -206,161 +280,199 @@ export default function App() {
     [toggleExpand]
   );
 
+  if (booting && !client) {
+    return (
+      <div className="app boot">
+        <p>Loading lineage…</p>
+        {error && <p className="detail-error">{error}</p>}
+      </div>
+    );
+  }
+
   return (
-    <div className="app">
-      <header className="app-header">
-        <div className="app-title">
-          <h1>Power BI column lineage</h1>
+    <ClientProvider client={client}>
+      <div className="app">
+        <header className="app-header">
+          <div className="app-title">
+            <h1>Power BI column lineage</h1>
+            <p>
+              source column → Power Query → semantic model → report visual
+              {stats ? ` · ${stats.nodes} nodes` : ""}
+            </p>
+          </div>
+          <div className="legend">
+            {Object.entries(CONFIDENCE).map(([key, value]) => (
+              <span key={key} className="legend-item" title={value.hint}>
+                <svg width="26" height="10" aria-hidden="true">
+                  <line
+                    x1="0"
+                    y1="5"
+                    x2="26"
+                    y2="5"
+                    stroke={value.color}
+                    strokeWidth="2"
+                    strokeDasharray={value.dash}
+                  />
+                </svg>
+                {value.label}
+              </span>
+            ))}
+            {warnings.length > 0 && (
+              <button
+                type="button"
+                className="legend-warnings"
+                onClick={() => setShowWarnings((current) => !current)}
+              >
+                {warnings.length} scan warning{warnings.length === 1 ? "" : "s"}
+              </button>
+            )}
+          </div>
+        </header>
+
+        <SourceBar
+          client={client}
+          onLoadFile={openFile}
+          onLoadDemo={openDemo}
+          busy={booting}
+        />
+
+        {showWarnings && (
+          <div className="warnings-drawer">
+            <h3>Where the scan could not see clearly</h3>
+            <ul>
+              {warnings.slice(0, 100).map((warning, index) => (
+                <li key={index}>{warning}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className="app-body">
+          <nav className="sidebar">
+            <SearchPanel onPick={setRootId} activeId={rootId} />
+          </nav>
+
+          <main className="canvas">
+            <div className="canvas-controls">
+              <label>
+                Direction
+                <select value={direction} onChange={(event) => setDirection(event.target.value)}>
+                  <option value="both">Both</option>
+                  <option value="upstream">Upstream</option>
+                  <option value="downstream">Downstream</option>
+                </select>
+              </label>
+              <label>
+                Depth
+                <input
+                  type="range"
+                  min="1"
+                  max="8"
+                  value={depth}
+                  onChange={(event) => setDepth(Number(event.target.value))}
+                />
+                <span className="control-value">{depth}</span>
+              </label>
+              <label>
+                Confidence
+                <select
+                  value={minConfidence}
+                  onChange={(event) => setMinConfidence(event.target.value)}
+                >
+                  <option value="">Everything</option>
+                  <option value="heuristic">Heuristic and better</option>
+                  <option value="resolved">Resolved only</option>
+                </select>
+              </label>
+              <label className="control-checkbox">
+                <input
+                  type="checkbox"
+                  checked={showContainment}
+                  onChange={(event) => setShowContainment(event.target.checked)}
+                />
+                Show containment
+              </label>
+              {loading && <span className="control-status">loading…</span>}
+            </div>
+
+            {error && <div className="banner banner-error">{error}</div>}
+            {notice && (
+              <div className="banner banner-notice">
+                {notice}
+                <button type="button" onClick={() => setNotice("")}>
+                  dismiss
+                </button>
+              </div>
+            )}
+
+            {!rootId && <EmptyState mode={client?.mode} />}
+
+            {rootId && (
+              <ReactFlow
+                nodes={flowNodes}
+                edges={flowEdges}
+                nodeTypes={nodeTypes}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onNodeClick={onNodeClick}
+                onNodeDoubleClick={onNodeDoubleClick}
+                fitView
+                fitViewOptions={{ padding: 0.2 }}
+                minZoom={0.15}
+              >
+                <Background gap={20} color="#e2e8f0" />
+                <Controls showInteractive={false} />
+                <MiniMap pannable zoomable nodeColor={(node) => kindStyle(node.data?.kind).color} />
+              </ReactFlow>
+            )}
+          </main>
+
+          {selected && (
+            <DetailPanel node={selected} onFocus={setRootId} onClose={() => setSelected(null)} />
+          )}
+        </div>
+      </div>
+    </ClientProvider>
+  );
+}
+
+function EmptyState({ mode }) {
+  return (
+    <div className="empty-state">
+      <h2>Pick a column, measure or report to trace</h2>
+      <p>
+        Search on the left. Click a node for its details and downstream impact; double-click
+        to expand or collapse its neighbours.
+      </p>
+      <ul className="empty-legend">
+        {["DataSource", "Column", "Measure", "Visual"].map((kind) => (
+          <li key={kind}>
+            <span style={{ color: kindStyle(kind).color }}>{kindStyle(kind).icon}</span>{" "}
+            {kindStyle(kind).label}
+          </li>
+        ))}
+      </ul>
+
+      {mode === "local" && (
+        <div className="empty-howto">
+          <h3>Tracing your own tenant</h3>
           <p>
-            source column → Power Query → semantic model → report visual
-            {stats ? ` · ${stats.nodes} nodes` : ""}
+            Scanning needs a service principal and, for Premium workspaces, an XMLA
+            connection — so it runs on your machine, not on this page. This page never
+            sees your credentials.
+          </p>
+          <pre>
+            {`pip install "pbilineage[api] @ git+https://github.com/sk98-code/sk98-code"
+cp .env.example .env      # tenant id, client id, secret
+pbilineage doctor         # check permissions
+pbilineage scan           # writes out/lineage/graph.json`}
+          </pre>
+          <p>
+            Then choose <strong>Open graph.json</strong> above, or drop the file anywhere
+            on that bar. It is read locally and never uploaded.
           </p>
         </div>
-        <div className="legend">
-          {Object.entries(CONFIDENCE).map(([key, value]) => (
-            <span key={key} className="legend-item" title={value.hint}>
-              <svg width="26" height="10" aria-hidden="true">
-                <line
-                  x1="0"
-                  y1="5"
-                  x2="26"
-                  y2="5"
-                  stroke={value.color}
-                  strokeWidth="2"
-                  strokeDasharray={value.dash}
-                />
-              </svg>
-              {value.label}
-            </span>
-          ))}
-          {warnings.length > 0 && (
-            <button
-              type="button"
-              className="legend-warnings"
-              onClick={() => setShowWarnings((current) => !current)}
-            >
-              {warnings.length} scan warning{warnings.length === 1 ? "" : "s"}
-            </button>
-          )}
-        </div>
-      </header>
-
-      {showWarnings && (
-        <div className="warnings-drawer">
-          <h3>Where the scan could not see clearly</h3>
-          <ul>
-            {warnings.slice(0, 100).map((warning, index) => (
-              <li key={index}>{warning}</li>
-            ))}
-          </ul>
-        </div>
       )}
-
-      <div className="app-body">
-        <nav className="sidebar">
-          <SearchPanel onPick={setRootId} activeId={rootId} />
-        </nav>
-
-        <main className="canvas">
-          <div className="canvas-controls">
-            <label>
-              Direction
-              <select value={direction} onChange={(event) => setDirection(event.target.value)}>
-                <option value="both">Both</option>
-                <option value="upstream">Upstream</option>
-                <option value="downstream">Downstream</option>
-              </select>
-            </label>
-            <label>
-              Depth
-              <input
-                type="range"
-                min="1"
-                max="8"
-                value={depth}
-                onChange={(event) => setDepth(Number(event.target.value))}
-              />
-              <span className="control-value">{depth}</span>
-            </label>
-            <label>
-              Confidence
-              <select
-                value={minConfidence}
-                onChange={(event) => setMinConfidence(event.target.value)}
-              >
-                <option value="">Everything</option>
-                <option value="heuristic">Heuristic and better</option>
-                <option value="resolved">Resolved only</option>
-              </select>
-            </label>
-            <label className="control-checkbox">
-              <input
-                type="checkbox"
-                checked={showContainment}
-                onChange={(event) => setShowContainment(event.target.checked)}
-              />
-              Show containment
-            </label>
-            {loading && <span className="control-status">loading…</span>}
-          </div>
-
-          {error && <div className="banner banner-error">{error}</div>}
-          {notice && (
-            <div className="banner banner-notice">
-              {notice}
-              <button type="button" onClick={() => setNotice("")}>
-                dismiss
-              </button>
-            </div>
-          )}
-
-          {!rootId && (
-            <div className="empty-state">
-              <h2>Pick a column, measure or report to trace</h2>
-              <p>
-                Search on the left. Click a node for its details and downstream impact;
-                double-click to expand or collapse its neighbours.
-              </p>
-              <ul className="empty-legend">
-                {["DataSource", "Column", "Measure", "Visual"].map((kind) => (
-                  <li key={kind}>
-                    <span style={{ color: kindStyle(kind).color }}>{kindStyle(kind).icon}</span>{" "}
-                    {kindStyle(kind).label}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {rootId && (
-            <ReactFlow
-              nodes={flowNodes}
-              edges={flowEdges}
-              nodeTypes={nodeTypes}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              onNodeClick={onNodeClick}
-              onNodeDoubleClick={onNodeDoubleClick}
-              fitView
-              fitViewOptions={{ padding: 0.2 }}
-              minZoom={0.15}
-              proOptions={{ hideAttribution: false }}
-            >
-              <Background gap={20} color="#e2e8f0" />
-              <Controls showInteractive={false} />
-              <MiniMap
-                pannable
-                zoomable
-                nodeColor={(node) => kindStyle(node.data?.kind).color}
-              />
-            </ReactFlow>
-          )}
-        </main>
-
-        {selected && (
-          <DetailPanel node={selected} onFocus={setRootId} onClose={() => setSelected(null)} />
-        )}
-      </div>
     </div>
   );
 }

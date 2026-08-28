@@ -9,3 +9,5 @@ build/
 .venv/
 node_modules/
 .env
+dist-pages/
+lineage-ui/public/demo-graph.json

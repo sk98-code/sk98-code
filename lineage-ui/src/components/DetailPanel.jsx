@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { getImpact } from "../api";
+import { useClient } from "../graph/ClientContext";
 import { confidenceStyle, kindStyle } from "../theme";
 
 // The side panel: what this object is, the expression behind it, and what
 // breaks downstream if it changes.
 export default function DetailPanel({ node, onFocus, onClose }) {
+  const client = useClient();
   const [impact, setImpact] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -15,14 +16,15 @@ export default function DetailPanel({ node, onFocus, onClose }) {
     setImpact(null);
     setError("");
     setLoading(true);
-    getImpact(node.id)
+    client
+      .impact(node.id)
       .then((result) => !cancelled && setImpact(result))
       .catch((exc) => !cancelled && setError(exc.message))
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
     };
-  }, [node?.id]);
+  }, [client, node?.id]);
 
   if (!node) return null;
   const style = kindStyle(node.kind);

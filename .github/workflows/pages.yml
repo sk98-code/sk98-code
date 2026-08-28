@@ -1,0 +1,94 @@
+name: Deploy lineage viewer to GitHub Pages
+
+# Publishes the lineage *viewer* as a static site. Scanning is not part of it
+# and cannot be: a static page cannot hold a service-principal secret, and the
+# Power BI admin APIs and XMLA endpoints are not reachable from a browser.
+# Users scan locally with the CLI and open the resulting graph.json here — the
+# file is read in their browser and never uploaded.
+
+on:
+  push:
+    branches:
+      - main
+      - claude/bi-migration-platform-dlles0
+      - claude/powerbi-fabric-column-lineage-tarxqb
+    paths:
+      - "lineage-ui/**"
+      - "src/pbilineage/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race; a queued one supersedes the running one.
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build static viewer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install pbilineage
+        run: pip install -e .
+
+      - name: Verify the graph pipeline before shipping a viewer for it
+        run: |
+          pip install pytest
+          pytest -q tests/test_lineage_graph.py tests/test_lineage_parsers.py
+
+      - name: Generate the bundled demo graph
+        # The page is useful on first load rather than an empty canvas.
+        run: pbilineage demo --out lineage-ui/public/demo-graph.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: lineage-ui/package-lock.json
+
+      - name: Install UI dependencies
+        working-directory: lineage-ui
+        run: npm ci
+
+      - name: Test the client-side graph queries
+        working-directory: lineage-ui
+        run: npm test
+
+      - name: Build
+        working-directory: lineage-ui
+        env:
+          # Project pages are served from /<repo>/, so assets and the bundled
+          # demo need that prefix. STATIC=1 tells the app there is no API here.
+          BASE: /${{ github.event.repository.name }}/
+          STATIC: "1"
+          OUT_DIR: ../dist-pages
+        run: npm run build
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist-pages
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { search } from "../api";
+import { useClient } from "../graph/ClientContext";
 import { kindStyle, NODE_KINDS } from "../theme";
 
 const SEARCHABLE = ["Column", "Measure", "Table", "Report", "Visual", "DataSource", "Dataflow"];
 
 export default function SearchPanel({ onPick, activeId }) {
+  const client = useClient();
   const [term, setTerm] = useState("");
   const [kind, setKind] = useState("");
   const [results, setResults] = useState([]);
@@ -14,7 +15,8 @@ export default function SearchPanel({ onPick, activeId }) {
     let cancelled = false;
     // debounce so typing does not fire a request per keystroke
     const timer = setTimeout(() => {
-      search(term, kind)
+      client
+        .search(term, kind)
         .then((payload) => !cancelled && setResults(payload.results))
         .catch((exc) => !cancelled && setError(exc.message));
     }, 180);
@@ -22,7 +24,7 @@ export default function SearchPanel({ onPick, activeId }) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [term, kind]);
+  }, [client, term, kind]);
 
   return (
     <div className="search-panel">

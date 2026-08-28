@@ -24,6 +24,55 @@ A path's confidence is the **weakest link on it**. One opaque hop makes the whol
 chain opaque, because that is what a reviewer needs to know before trusting an
 impact answer.
 
+## Hosted viewer (GitHub Pages)
+
+The **viewer** is deployed as a static site; **scanning is not, and cannot be.**
+That split is deliberate rather than a limitation of the hosting:
+
+* A static page cannot hold a service-principal secret. Anything in the bundle
+  is readable by anyone who opens devtools, and `Tenant.Read.All` is read
+  access to every workspace's metadata in the tenant.
+* The XMLA endpoint speaks MSOLAP over TCP. A browser cannot open that
+  connection at any privilege level.
+* The Admin REST APIs are app-only, server-to-server surfaces.
+
+So scanning runs on the machine that owns the credentials, and the hosted page
+does the part that needs no secrets:
+
+1. `pbilineage scan` locally → `out/lineage/graph.json`
+2. Open the hosted viewer, choose **Open graph.json** (or drop the file on the
+   source bar)
+3. The file is read with the browser's File API and **never uploaded** — no
+   request leaves the page
+
+The site loads the synthetic demo tenant on arrival, so the link is useful to
+someone who has not scanned anything yet.
+
+### Enabling it
+
+`.github/workflows/pages.yml` builds and deploys on every push that touches the
+UI or the package. One manual step is needed first, because a workflow cannot
+grant itself Pages:
+
+> **Settings → Pages → Build and deployment → Source: GitHub Actions**
+
+The site then publishes to `https://<owner>.github.io/<repo>/`. The workflow
+runs the Python graph/parser tests and the UI's own test suite before it
+builds, so a broken pipeline does not ship a viewer for itself. It also
+regenerates the bundled demo graph from the current code, which means the demo
+can never drift from the parsers.
+
+To build the static bundle yourself:
+
+```bash
+pbilineage demo --out lineage-ui/public/demo-graph.json
+cd lineage-ui && npm ci
+BASE=/your-repo/ STATIC=1 OUT_DIR=../dist-pages npm run build
+```
+
+`STATIC=1` tells the app there is no API behind it, so it skips the health
+probe entirely — the built bundle contains no `/api/` calls at all.
+
 ## Quick start (no tenant required)
 
 ```bash
@@ -201,6 +250,21 @@ survives greyscale and colour-blindness. Click a node for details, double-click
 to expand or collapse its neighbours; a single expansion is capped so a
 high-fan-out node cannot freeze the canvas.
 
+The same app runs against either backing, chosen at startup:
+
+| | Served by `pbilineage serve` | Hosted static build |
+|---|---|---|
+| Data | FastAPI over the graph store | a `graph.json` in the browser tab |
+| Traversal | `graph/traversal.py` | `lineage-ui/src/graph/queries.js` |
+| Network | calls `/api/*` | none at all |
+
+The client-side port is a real reimplementation of the traversal, search and
+impact logic, so the hosted viewer answers the same questions with no server.
+Because the two have to agree, the JS port is tested separately
+(`npm test`) against the same rules the Python enforces — edge direction,
+weakest-link confidence, containment exclusion, depth limits and cycle
+termination.
+
 ## CLI
 
 ```
@@ -257,9 +321,11 @@ parser path, and `pbilineage doctor` says so.
 ## Development
 
 ```bash
-PYTHONPATH=src python3 -m pytest tests/test_lineage_*.py -q
+PYTHONPATH=src python3 -m pytest tests/test_lineage_*.py -q   # 186 Python tests
+cd lineage-ui && npm test                                     # 32 JS tests
 cd lineage-ui && npm run dev            # UI dev server, proxies /api to :8000
 ```
 
 Tests run against a fake HTTP transport and a synthetic tenant — no network, no
-credentials, no Neo4j.
+credentials, no Neo4j. CI (`.github/workflows/ci.yml`) runs both suites, plus
+ruff and black, on every push.
