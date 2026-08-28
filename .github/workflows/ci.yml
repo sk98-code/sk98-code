@@ -22,7 +22,11 @@ jobs:
         # The dev extra bounds ruff and black, so CI lints with the same
         # versions a contributor gets. Installing them separately here would
         # float past those bounds and fail on rules this code never saw.
-        run: pip install -e ".[dev,api]"
+        #
+        # `web` is needed too: this repository holds two products and one test
+        # suite, and bimigrate's web tests need python-multipart, which only
+        # that extra pulls in.
+        run: pip install -e ".[dev,api,web]"
 
       - name: Lint
         run: |
