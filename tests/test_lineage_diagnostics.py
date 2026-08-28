@@ -11,11 +11,10 @@ import json
 
 import pytest
 
-from pbilineage.diagnostics import Scrubber, capture_bundle
-from pbilineage.demo.fixtures import FINANCE_WORKSPACE, demo_scan_result
-from tests.test_lineage_scan import FakeTransport, build_client, ok, settings
-
 from pbilineage.clients.http import HttpResponse
+from pbilineage.demo.fixtures import FINANCE_WORKSPACE, demo_scan_result
+from pbilineage.diagnostics import Scrubber, capture_bundle
+from tests.test_lineage_scan import FakeTransport, build_client, ok, settings
 
 
 @pytest.fixture

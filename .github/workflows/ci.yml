@@ -19,11 +19,13 @@ jobs:
           cache: pip
 
       - name: Install
+        # The dev extra bounds ruff and black, so CI lints with the same
+        # versions a contributor gets. Installing them separately here would
+        # float past those bounds and fail on rules this code never saw.
         run: pip install -e ".[dev,api]"
 
       - name: Lint
         run: |
-          pip install ruff black
           ruff check src tests
           black --check src tests
 
@@ -41,7 +43,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: lineage-ui/package-lock.json
 

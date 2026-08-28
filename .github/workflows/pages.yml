@@ -54,7 +54,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: lineage-ui/package-lock.json
 
@@ -77,6 +77,12 @@ jobs:
         run: npm run build
 
       - uses: actions/configure-pages@v5
+        with:
+          # Create the Pages site if it does not exist yet, so the first
+          # deploy does not require a manual visit to Settings. If the token
+          # is not permitted to enable Pages, this still fails with a clear
+          # message and the one-time toggle is documented in the README.
+          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:

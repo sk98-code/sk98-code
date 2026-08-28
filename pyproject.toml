@@ -23,7 +23,10 @@ dependencies = [
 [project.optional-dependencies]
 agents = ["anthropic>=0.40"]
 web = ["fastapi>=0.110", "uvicorn>=0.29", "python-multipart>=0.0.9"]
-dev = ["pytest>=8.0", "ruff>=0.4", "black>=24.0", "httpx>=0.27"]
+# Linters are bounded, not floating: a new ruff or black release widens its
+# default rule set or changes formatting, which turns a green build red on
+# someone else's schedule rather than on a change to this repository.
+dev = ["pytest>=8.0", "ruff>=0.15,<0.16", "black>=26.3,<27", "httpx>=0.27"]
 
 # --- pbilineage extras -------------------------------------------------------
 # The core package runs on the standard library plus pydantic: it can parse
@@ -51,6 +54,13 @@ where = ["src"]
 [tool.ruff]
 line-length = 110
 target-version = "py311"
+
+[tool.ruff.lint]
+# Stated explicitly rather than inherited from ruff's defaults. The defaults
+# widen between releases, so relying on them means the rule set depends on
+# whichever ruff a machine happens to have. This is the same set ruff 0.15
+# enables by default, pinned so local and CI always agree.
+select = ["E4", "E7", "E9", "F"]
 
 [tool.black]
 line-length = 110
