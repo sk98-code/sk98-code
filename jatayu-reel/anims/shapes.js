@@ -157,6 +157,37 @@
       P.kalashLip = ellipse(0, -523, 16, 5);
       P.kalashBud = ellipse(0, -535, 9, 12);
       P.flagPole = { x0: 0, y0: -546, x1: -12, y1: -652 };
+
+      // --- carved details ---
+      P.capitals = [-188, -122, -56, 56, 122, 188].map((x) => ({
+        top: poly([[x - 17, -236], [x + 17, -236], [x + 13, -226], [x - 13, -226]]),
+        base: poly([[x - 16, -122], [x + 16, -122], [x + 18, -112], [x - 18, -112]]),
+      }));
+      P.lotus = [];
+      for (let x = -240; x <= 240; x += 20) {
+        const q = new Path2D();
+        q.moveTo(x - 9, -112); q.quadraticCurveTo(x - 8, -126, x, -131); q.quadraticCurveTo(x + 8, -126, x + 9, -112); q.closePath();
+        P.lotus.push(q);
+      }
+      P.spires = [-178, 178].map((x) => {
+        const sp = new Path2D();
+        sp.moveTo(x - 30, -260); sp.quadraticCurveTo(x - 28, -295, x - 13, -318);
+        sp.lineTo(x + 13, -318); sp.quadraticCurveTo(x + 28, -295, x + 30, -260); sp.closePath();
+        return { body: sp, cap: ellipse(x, -322, 16, 5), top: ellipse(x, -333, 7, 9) };
+      });
+      const niche = (cx, by, w, h) => {
+        const q = new Path2D();
+        q.moveTo(cx - w / 2, by); q.lineTo(cx - w / 2, by - h * 0.55);
+        q.quadraticCurveTo(cx - w / 2, by - h, cx, by - h * 1.05);
+        q.quadraticCurveTo(cx + w / 2, by - h, cx + w / 2, by - h * 0.55);
+        q.lineTo(cx + w / 2, by); q.closePath();
+        return q;
+      };
+      P.niches = [niche(0, -270, 40, 50), niche(-70, -276, 22, 34), niche(70, -276, 22, 34), niche(0, -342, 30, 40), niche(0, -408, 22, 30)];
+      P.bells = [-155, -89, 0, 89, 155].map((x) => ({ x, y: -228 }));
+      P.garlands = [[-188, -122], [-122, -56], [56, 122], [122, 188]];
+      P.frieze = [];
+      for (let x = -260; x <= 260; x += 26) P.frieze.push(x);
       _vimanStatic = P;
     }
     const P = Object.assign({}, _vimanStatic);
@@ -172,35 +203,50 @@
   }
 
   // =====================================================================
-  // JATAYU  (local coords: facing +x; drawn mirrored so he faces left)
+  // JATAYU  (body-local coords: facing +x, origin = body centre;
+  //          drawn mirrored so he faces left)
   // =====================================================================
-  const JATAYU_SCALE = 1.15;
-  const FOOT_EXT = { x: 90, y: 82 };     // talons fully forward
-  const FOOT_TUCK = { x: -50, y: 46 };
+  const JATAYU_SCALE = 1.18;
 
+  /** Pose drivers, all in scene time. */
   function jatayuPose(t) {
-    let spread, theta, talons, pitch;
+    let spread, theta, talons, pitch, tailSpread, jaw, grip;
     if (t < STRIKE_T) {
-      const fl = smooth((t - 1.35) / 0.35);              // flare complete at 1.7 s
-      spread = lerp(0.18, 1, fl);
-      theta = lerp(2.95, 4.15, fl) + 0.04 * Math.sin(TAU * 7 * t) * (1 - fl);
-      theta += 0.2 * smooth((t - FLARE_T) / 0.3);        // cupping air before the hit
-      talons = smooth((t - 1.45) / 0.3);
-      pitch = lerp(0.75, -0.45, smooth((t - 1.45) / 0.4));
+      const fl = smooth((t - 1.3) / 0.4);                  // flare complete at 1.7 s
+      spread = lerp(0.1, 1, fl);
+      theta = lerp(3.0, 4.2, fl) + 0.05 * Math.sin(TAU * 7 * t) * (1 - fl);
+      theta += 0.18 * smooth((t - FLARE_T) / 0.3);         // cupping air before the hit
+      talons = smooth((t - 1.42) / 0.38);
+      pitch = lerp(0.8, -0.5, smooth((t - 1.38) / 0.45));
+      tailSpread = lerp(0.2, 1, fl);
+      jaw = smooth((t - 1.6) / 0.25);                      // screech as he strikes
+      grip = 0;
     } else {
       const s = t - STRIKE_T;
-      const amp = 0.6 + 0.4 * smooth(s / 0.4);
-      spread = 0.95;
-      theta = 4.35 - amp + amp * Math.cos(TAU * 3 * s);  // continuous at s=0
-      talons = 1 - smooth((s - 0.15) / 0.5);
-      pitch = lerp(-0.45, -0.78, smooth(s / 0.35));
+      const amp = 0.62 + 0.4 * smooth(s / 0.45);
+      spread = lerp(1, 0.94, smooth(s / 0.3));
+      theta = 4.38 - amp + amp * Math.cos(TAU * 2.8 * s);  // continuous at s = 0
+      talons = 1 - smooth((s - 0.22) / 0.55);
+      pitch = lerp(-0.5, -0.82, smooth(s / 0.35));
       pitch = lerp(pitch, -0.5, smooth((s - 0.8) / 0.8));
+      tailSpread = lerp(1, 0.45, smooth((s - 0.2) / 0.6));
+      jaw = 1 - smooth((s - 0.35) / 0.35);
+      grip = smooth(s / 0.06) * (1 - smooth((s - 0.45) / 0.35));
     }
-    return { spread, theta, talons, pitch };
+    return { spread, theta, talons, pitch, tailSpread, jaw, grip };
   }
 
-  function footLocal(talons) {
-    return { x: lerp(FOOT_TUCK.x, FOOT_EXT.x, talons), y: lerp(FOOT_TUCK.y, FOOT_EXT.y, talons) };
+  const HIP = { x: 14, y: 30 };
+  function legJoints(talons) {
+    return {
+      knee: { x: lerp(-16, 30, talons), y: lerp(46, 58, talons) },
+      foot: { x: lerp(-54, 78, talons), y: lerp(52, 80, talons) },
+    };
+  }
+  /** The point of the talons that touches the kalash. */
+  function contactLocal(talons) {
+    const f = legJoints(talons).foot;
+    return { x: f.x + 24, y: f.y + 4 };
   }
 
   /** Body-local point -> world, for a state {x,y,pitch,scale} (mirrored to face left). */
@@ -215,8 +261,7 @@
     if (!_target) {
       const K = kalashWorld(STRIKE_T);
       const pose = jatayuPose(STRIKE_T - 1e-6);
-      const f = footLocal(1);
-      const off = jatayuToWorld({ x: 0, y: 0, pitch: pose.pitch, scale: JATAYU_SCALE }, { x: f.x + 8, y: f.y - 2 });
+      const off = jatayuToWorld({ x: 0, y: 0, pitch: pose.pitch, scale: JATAYU_SCALE }, contactLocal(1));
       _target = { x: K.x - off.x, y: K.y - off.y };
     }
     return _target;
@@ -228,78 +273,130 @@
     let p;
     if (t <= STRIKE_T) {
       const x = t / STRIKE_T;
-      const u = 0.5 * x + 0.5 * (1 - (1 - x) * (1 - x));
-      p = quad({ x: 1380, y: -300 }, { x: 1040, y: 260 }, T, u);
+      const u = 0.45 * x + 0.55 * (1 - (1 - x) * (1 - x));
+      p = quad({ x: 1420, y: -340 }, { x: 1120, y: 300 }, T, u);
     } else {
-      const v = Math.pow(clamp((t - STRIKE_T) / 2.9), 1.45);
-      p = quad(T, { x: T.x + 170, y: T.y - 520 }, { x: -380, y: -260 }, v);
+      const s = t - STRIKE_T;
+      const v = Math.pow(clamp(s / 2.9), 1.45);
+      p = quad(T, { x: T.x + 170, y: T.y - 520 }, { x: -420, y: -300 }, v);
+      // recoil kick off the spire
+      p.x += 26 * Math.sin(Math.min(s, 0.25) / 0.25 * Math.PI) ;
+      p.y -= 18 * Math.sin(Math.min(s, 0.25) / 0.25 * Math.PI);
     }
     return Object.assign({ x: p.x, y: p.y, scale: JATAYU_SCALE }, pose);
   }
 
-  /** Wing outline in wing-local coords (x along the wing, trailing edge at -y). */
-  function wingPaths(L, c) {
-    const arm = new Path2D();
-    arm.moveTo(0, 12);
-    arm.quadraticCurveTo(0.35 * L, 22, 0.72 * L, 14);
-    arm.lineTo(0.72 * L, -0.5 * c);
-    // scalloped secondaries
-    const n = 5;
-    for (let i = 0; i < n; i++) {
-      const x0 = 0.72 * L - (i / n) * 0.72 * L, x1 = 0.72 * L - ((i + 1) / n) * 0.72 * L;
-      const y0 = -lerp(0.5, 0.95, i / n) * c, y1 = -lerp(0.5, 0.95, (i + 1) / n) * c;
-      arm.quadraticCurveTo((x0 + x1) / 2, Math.min(y0, y1) - 0.16 * c, x1, y1);
-    }
-    arm.lineTo(0, -0.8 * c);
-    arm.closePath();
+  /** Full skeleton + feather layout for drawing (body-local coords). */
+  function jatayuRig(t) {
+    const p = jatayuPose(t);
+    const lag = jatayuPose(t - 0.07);                    // hand trails the arm: follow-through
+    const sp = p.spread;
+    const La = lerp(72, 150, sp), Lh = lerp(84, 190, sp), chord = lerp(58, 96, sp);
 
-    const coverts = new Path2D();
-    coverts.moveTo(0, 12);
-    coverts.quadraticCurveTo(0.35 * L, 22, 0.72 * L, 14);
-    coverts.lineTo(0.7 * L, -0.18 * c);
-    coverts.quadraticCurveTo(0.35 * L, -0.2 * c, 0, -0.35 * c);
-    coverts.closePath();
+    const wing = (shoulder, dTheta) => {
+      const a1 = p.theta + dTheta;
+      const a2 = lag.theta + dTheta + 0.3 * (1 - sp);
+      const S0 = shoulder;
+      const Wr = { x: S0.x + Math.cos(a1) * La, y: S0.y + Math.sin(a1) * La };
+      const Tip = { x: Wr.x + Math.cos(a2) * Lh, y: Wr.y + Math.sin(a2) * Lh };
+      const fan = lerp(0.28, 1, sp);
+      const prim = [], sec = [], cov = [];
+      for (let i = 0; i < 10; i++) {                     // i = 0 is the outermost primary
+        const k = i / 9;
+        const u = 1 - k;
+        const base = { x: lerp(Wr.x, lerp(Wr.x, Tip.x, 0.55), u), y: lerp(Wr.y, lerp(Wr.y, Tip.y, 0.55), u) };
+        prim.push({ x: base.x, y: base.y, a: a2 - k * (Math.PI / 2 - 0.22) * fan + 0.04 * Math.sin(i * 2.1),
+                    len: lerp(Lh * 0.62, chord * 1.08, k), w: lerp(15, 23, k), finger: i < 4 });
+      }
+      for (let i = 0; i < 10; i++) {
+        const u = (i + 0.5) / 10;
+        const base = { x: lerp(S0.x, Wr.x, u), y: lerp(S0.y, Wr.y, u) };
+        sec.push({ x: base.x, y: base.y, a: a1 - Math.PI / 2 + 0.12 * (u - 0.5) + 0.25 * (lag.theta - p.theta),
+                   len: chord * (0.94 + 0.12 * hash(i, 51)), w: 26 });
+      }
+      for (let i = 0; i < 12; i++) {
+        const u = (i + 0.5) / 12;
+        const onHand = u > 0.75;
+        const A = onHand ? Wr : S0, B = onHand ? Tip : Wr, uu = onHand ? (u - 0.75) / 0.25 * 0.35 : u / 0.75;
+        const ang = onHand ? a2 : a1;
+        cov.push({ x: lerp(A.x, B.x, uu), y: lerp(A.y, B.y, uu), a: ang - Math.PI / 2 + 0.1,
+                   len: chord * 0.6, w: 24 });
+      }
+      return { S: S0, Wr, Tip, a1, a2, La, Lh, chord, prim, sec, cov };
+    };
 
-    const fingers = new Path2D();
-    for (let k = 0; k < 5; k++) {
-      const by = lerp(8, -0.48 * c, k / 4);
-      const phi = -0.06 - 0.15 * k;
-      const fl = 0.36 * L * (1 - 0.07 * k);
-      const cx = 0.66 * L + Math.cos(phi) * fl / 2, cy = by + Math.sin(phi) * fl / 2;
-      fingers.ellipse(cx, cy, fl / 2, 9 + 0.012 * L, phi, 0, TAU);
+    const tail = [];
+    for (let k = 0; k < 11; k++) {
+      const u = k / 10 - 0.5;
+      tail.push({ x: -74, y: 2, a: Math.PI + u * lerp(0.35, 1.15, p.tailSpread) - 0.06 + 0.05 * p.pitch,
+                  len: 122 * (1 - 0.18 * Math.abs(u) * 2), w: 17 });
     }
-    return { arm, coverts, fingers };
+
+    const leg = legJoints(p.talons);
+    const neckBase = { x: 62, y: -14 };
+    const nu = -0.5 - 0.5 * p.pitch;                     // neck lifts the head when diving
+    const head = { x: neckBase.x + Math.cos(nu) * 60, y: neckBase.y + Math.sin(nu) * 60, rot: -0.62 * p.pitch };
+
+    return {
+      pose: p,
+      far: wing({ x: 42, y: -30 }, -0.3),
+      near: wing({ x: 24, y: -24 }, 0),
+      tail, hip: HIP, knee: leg.knee, foot: leg.foot,
+      neckBase, head,
+    };
   }
 
-  let _jStatic = null;
-  function jatayuParts() {
-    if (!_jStatic) {
-      const J = {};
-      J.body = ellipse(0, 0, 98, 50, -0.06);
-      J.belly = ellipse(10, 18, 70, 26, -0.06);
-      J.tail = poly([[-78, -16], [-184, -36], [-198, -12], [-190, 12], [-78, 22]]);
-      J.tailLines = [[-110, -4, -188, -24], [-110, 4, -192, 0]];
-      J.thigh = ellipse(20, 36, 38, 26, 0.45);
-      J.neck = ribbon({ x: 66, y: -12 }, { x: 92, y: -24 }, { x: 108, y: -40 }, { x: 128, y: -50 }, 30, 22);
-      const ruff = [];
-      for (let i = 0; i < 26; i++) {
-        const a = (i / 26) * TAU, r = (i % 2 ? 31 : 40) + 3 * Math.sin(i * 1.7);
-        ruff.push([64 + Math.cos(a) * r, -14 + Math.sin(a) * r * 0.8]);
-      }
-      J.ruff = poly(ruff);
-      J.head = ellipse(140, -54, 28, 21, -0.1);
-      const beak = new Path2D();
-      beak.moveTo(158, -66); beak.quadraticCurveTo(194, -66, 197, -46);
-      beak.quadraticCurveTo(194, -36, 186, -42);
-      beak.lineTo(160, -42); beak.closePath();
-      J.beak = beak;
-      J.beakTip = poly([[186, -54], [197, -46], [192, -38], [184, -43]]);
-      J.eye = { x: 146, y: -60, r: 5.5 };
-      J.brow = [134, -70, 156, -63];
-      J.hip = { x: 16, y: 32 };
-      _jStatic = J;
+  /** Asymmetric feather vane along +x (length len, width w). */
+  function featherShape(len, w, finger) {
+    const p = new Path2D();
+    const tipW = finger ? 0.18 : 0.35;
+    p.moveTo(0, 0);
+    p.bezierCurveTo(len * 0.2, -w * 0.62, len * 0.75, -w * 0.58, len, -w * tipW * 0.6);
+    p.quadraticCurveTo(len * 1.03, 0, len * 0.96, w * tipW);
+    p.bezierCurveTo(len * 0.75, w * 0.55, len * 0.25, w * 0.5, 0, 0);
+    p.closePath();
+    return p;
+  }
+
+  let _head = null;
+  /** Head parts in head-local coords (origin = top of neck, facing +x). */
+  function headParts() {
+    if (!_head) {
+      const H = {};
+      H.skull = ellipse(10, -6, 30, 22, -0.08);
+      const up = new Path2D();
+      up.moveTo(26, -17); up.quadraticCurveTo(58, -21, 66, -2);
+      up.quadraticCurveTo(68, 9, 58, 10); up.lineTo(56, 3); up.lineTo(27, 4); up.closePath();
+      H.upper = up;
+      H.hook = poly([[56, -6], [66, -2], [67, 6], [58, 10], [56, 3]]);
+      const lo = new Path2D();
+      lo.moveTo(28, 4); lo.lineTo(55, 4); lo.quadraticCurveTo(50, 13, 30, 12); lo.closePath();
+      H.lower = lo;
+      H.mouth = poly([[28, 3], [56, 3], [30, 14]]);
+      H.nostril = ellipse(43, -7, 5.5, 2.2, -0.15);
+      H.cere = [33, -16, 31, 4];
+      H.eye = { x: 15, y: -11, r: 7.5 };
+      H.brow = poly([[0, -20], [28, -24], [26, -15], [12, -14], [2, -15]]);
+      H.wrinkles = [[-10, -14, -4, -2], [-15, -8, -9, 4], [-4, 4, 8, 8], [0, 9, 14, 11]];
+      H.ear = ellipse(-5, -2, 3.5, 4.5);
+      _head = H;
     }
-    return _jStatic;
+    return _head;
+  }
+
+  /** Fluffy scalloped ruff ring around a centre. */
+  function ruffPath(cx, cy, r0, r1, lobes, squash, seed) {
+    const p = new Path2D();
+    for (let i = 0; i <= lobes; i++) {
+      const a = (i / lobes) * TAU;
+      const r = r0 + (r1 - r0) * (0.6 + 0.4 * hash(i % lobes, seed));
+      const x = cx + Math.cos(a) * r0, y = cy + Math.sin(a) * r0 * squash;
+      if (i === 0) { p.moveTo(x, y); continue; }
+      const am = a - Math.PI / lobes;
+      p.quadraticCurveTo(cx + Math.cos(am) * r * 1.18, cy + Math.sin(am) * r * 1.18 * squash, x, y);
+    }
+    p.closePath();
+    return p;
   }
 
   // =====================================================================
@@ -422,11 +519,85 @@
     return puffs(circles);
   }
 
+
+  /** Swing angle (radians, relative to world vertical) of hanging bell i. */
+  function bellSwing(t, i) {
+    const s = t - STRIKE_T;
+    let a = 0.06 * Math.sin(TAU * 0.8 * t + i * 1.3);
+    if (s > 0) a += 0.55 * Math.exp(-1.7 * s) * Math.sin(8.5 * s + i * 0.6);
+    return a;
+  }
+
+  // ---------- cinematic time: fast dive, slow-motion flare, hit-stop ----------
+  // Output time t -> scene time. Fixed so scene(2.0) == 2.0 and scene(5.0) == 5.0,
+  // which keeps the strike on frame 60 for the reel.
+  const _remap = (() => {
+    const speed = (t) => {
+      if (t < STRIKE_T) return lerp(1.08, 0.5, smooth((t - 1.4) / 0.45));
+      return lerp(0.12, 1.12, smooth((t - 2.08) / 0.55));
+    };
+    const N = 2000, tab = new Float64Array(N + 1);
+    let acc = 0, accStrike = 0;
+    const dt = DUR / N;
+    for (let i = 0; i < N; i++) {
+      tab[i] = acc;
+      const tm = (i + 0.5) * dt;
+      acc += speed(tm) * dt;
+      if (Math.abs((i + 1) * dt - STRIKE_T) < 1e-9) accStrike = acc;
+    }
+    tab[N] = acc;
+    // normalise pre- and post-strike segments independently
+    const iS = Math.round(STRIKE_T / dt);
+    const pre = tab[iS], post = tab[N] - tab[iS];
+    for (let i = 0; i <= N; i++) {
+      tab[i] = i <= iS ? tab[i] / pre * STRIKE_T : STRIKE_T + (tab[i] - pre) / post * (DUR - STRIKE_T);
+    }
+    return { tab, dt, N };
+  })();
+  function sceneTime(t) {
+    const x = clamp(t / _remap.dt, 0, _remap.N);
+    const i = Math.min(_remap.N - 1, Math.floor(x));
+    return lerp(_remap.tab[i], _remap.tab[i + 1], x - i);
+  }
+
+  // ---------- camera (output time) ----------
+  const CAM_KEYS = [
+    [0.0, 1.0, 540, 960, 0],
+    [1.3, 1.08, 565, 885, -0.02],
+    [1.95, 1.3, 540, 800, -0.035],
+    [2.05, 1.46, 520, 785, 0.012],
+    [2.7, 1.27, 520, 800, 0],
+    [5.0, 1.12, 540, 860, 0],
+  ];
+  function camera(t) {
+    let k = 0;
+    while (k < CAM_KEYS.length - 2 && t > CAM_KEYS[k + 1][0]) k++;
+    const A = CAM_KEYS[k], B = CAM_KEYS[k + 1];
+    const u = smooth((t - A[0]) / (B[0] - A[0]));
+    const cam = { z: lerp(A[1], B[1], u), fx: lerp(A[2], B[2], u), fy: lerp(A[3], B[3], u), rot: lerp(A[4], B[4], u), sx: 0, sy: 0 };
+    const s = t - STRIKE_T;
+    if (s >= 0 && s < 0.7) {                            // impact shake, seeded by frame
+      const f = Math.round(t * FPS), k2 = 26 * Math.exp(-5.5 * s);
+      cam.sx = (hash(f, 41) - 0.5) * 2 * k2; cam.sy = (hash(f, 42) - 0.5) * 2 * k2;
+    }
+    return cam;
+  }
+  /** Apply the camera; depth 1 = full camera (subject plane), 0 = locked to screen. */
+  function applyCamera(c, cam, depth = 1) {
+    const z = 1 + (cam.z - 1) * depth;
+    const fx = 540 + (cam.fx - 540) * depth, fy = 960 + (cam.fy - 960) * depth;
+    c.translate(W / 2 + cam.sx * depth, H / 2 + cam.sy * depth);
+    c.rotate(cam.rot * depth);
+    c.scale(z, z);
+    c.translate(-fx, -fy);
+  }
+
   global.Shapes = {
     W, H, FPS, DUR, FRAMES, FLARE_T, STRIKE_T, STRIKE_FRAME, TAU,
     clamp, lerp, smooth, hash, quad, cubic, ribbon, poly, ellipse, puffs,
     vimanState, vimanParts, localToWorld, kalashWorld, KALASH_LOCAL,
-    jatayuState, jatayuPose, jatayuParts, wingPaths, footLocal, jatayuToWorld,
+    jatayuState, jatayuPose, jatayuRig, jatayuToWorld, contactLocal, featherShape, headParts, ruffPath,
+    bellSwing, sceneTime, camera, applyCamera,
     birdsState, birdPath, feathersState, featherPath, cloudBand, cumulus,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

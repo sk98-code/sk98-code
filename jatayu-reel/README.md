@@ -37,6 +37,17 @@ freeze a frame.
 Every frame is a pure function of time (randomness comes from a hash of the
 frame number), so renders are identical each run.
 
+## Shared cinematic timing (`shapes.js`)
+
+- `sceneTime(t)` remaps output time: a fast dive, slow motion into the flare, a
+  hit-stop on the strike, then back to speed. It is pinned so the strike stays on
+  **frame 60** and the clip still ends at 5.0 s.
+- `camera(t)` gives push-in → punch zoom at the strike → impact shake → slow pull-out.
+  `applyCamera(ctx, cam, depth)` adds parallax (depth < 1 for background layers).
+- `jatayuRig(t)` gives the skeleton and per-feather layout: two-segment wings whose
+  hand trails the arm (follow-through), fanned tail, legs/toes that grip on contact,
+  stabilised head with an opening beak.
+
 ## Styles
 
 | # | Style | File | Status |
