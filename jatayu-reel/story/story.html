@@ -1,0 +1,843 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<title>Sampati aur Jatayu</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  @font-face { font-family: 'Noto Sans Devanagari'; font-weight: 400; src: url(fonts/noto-sans-devanagari-devanagari-400-normal.woff2) format('woff2'); }
+  @font-face { font-family: 'Noto Sans Devanagari'; font-weight: 700; src: url(fonts/noto-sans-devanagari-devanagari-700-normal.woff2) format('woff2'); }
+  @font-face { font-family: 'Rozha One'; src: url(fonts/rozha-one-devanagari-400-normal.woff2) format('woff2'); }
+  html, body { margin: 0; height: 100%; background: #111; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { height: 100vh; width: auto; aspect-ratio: 9 / 16; display: block; }
+  #hud { position: fixed; left: 8px; bottom: 8px; color: #ddd; font: 12px/1.3 monospace; }
+  body.render #hud { display: none; }
+  body.render canvas { height: auto; }
+</style>
+</head>
+<body>
+<canvas id="c" width="1080" height="1920"></canvas>
+<div id="hud"></div>
+<script src="../anims/shapes.js"></script>
+<script src="../anims/anime-kit.js"></script>
+<script src="chars.js"></script>
+<script src="timeline.js"></script>
+<script>
+/*
+ * संपाती और जटायु – a 113-second animated story reel (1080x1920, 30 fps).
+ * Narration timing comes from timeline.js (built by build.mjs from the voice clips);
+ * every scene animates to the cue times of its own narration line.
+ * renderFrame(t) is a pure function of t.
+ */
+(function () {
+  const S = window.Shapes, K = window.AnimeKit, C = window.Chars, TL = window.TIMELINE;
+  const { W, H, FPS, TAU, clamp, lerp, smooth, hash } = S;
+  const { INK, P, LW, rot, cel3 } = K;
+  const PAL = C.PAL;
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+  const bufA = mk(W, H), bufB = mk(W, H);
+  const bloom = mk(W / 4, H / 4), bctx = bloom.getContext('2d');
+  const grain = mk(W / 4, H / 4), gctx = grain.getContext('2d'), grainData = gctx.createImageData(W / 4, H / 4);
+  const FONT_CAP = "700 54px 'Noto Sans Devanagari'";
+  const XFADE = 0.4;
+
+  // ================================================================ helpers
+  const ease = (a, b, u) => lerp(a, b, smooth(u));
+  const hex = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+  const mixHex = (a, b, u) => { const A = hex(a), B = hex(b); return '#' + A.map((v, i) => Math.round(lerp(v, B[i], clamp(u))).toString(16).padStart(2, '0')).join(''); };
+  const mixPal = (a, b, u) => a.map((x, i) => (b[i] ? mixHex(x, b[i], u) : x));
+  const noise1 = (x, seed) => Math.sin(x * 0.0061 + seed) * 0.5 + Math.sin(x * 0.0137 + seed * 2.3) * 0.3 + Math.sin(x * 0.031 + seed * 5.1) * 0.2;
+
+  // bird palettes
+  const BIRD = {
+    jatayu: {},
+    jatayuOld: { feather: ['#b3a89d', '#6e625a', '#3a322d', '#e8e0d4'], featherFar: ['#837870', '#4d433d', '#2a2421', '#b0a69a'],
+                 covert: ['#c9beb2', '#857a70', '#4e453f', '#efe8de'], body: ['#a2968a', '#5f544d', '#342c27'],
+                 skin: ['#ffe0e2', '#e9a3ad', '#b86677'] },
+    sampati: { feather: ['#c98a5c', '#7a3e22', '#3e1a0c', '#f2d2b0'], featherFar: ['#94603e', '#552a16', '#2a1208', '#c49a78'],
+               covert: ['#e0a878', '#9a5a32', '#5a2c14', '#f8e0c4'], body: ['#b07a52', '#6a3820', '#36180a'],
+               ruff: ['#fffbe8', '#f6e6c0', '#d2b888'] },
+    burnt: { feather: ['#6b5a52', '#2d221e', '#120c0a', '#5a4a44'], featherFar: ['#4a3d38', '#1e1714', '#0b0807', '#3d332e'],
+             covert: ['#7a6a62', '#3a2e28', '#1a1310', '#665650'], body: ['#7a5a48', '#3e2618', '#1c0e06'] },
+    golden: { feather: ['#ffe6a0', '#e0a040', '#8a5414', '#fff6d0'], featherFar: ['#d4a860', '#946020', '#4e300a', '#f4dca0'],
+              covert: ['#fff0c0', '#eab860', '#a06c20', '#fffbe8'], body: ['#d89a5a', '#8c5424', '#4a2a0c'] },
+  };
+  function mixBird(a, b, u) {
+    const out = {};
+    for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+      const A = a[k] || P[k], B = b[k] || P[k];
+      out[k] = mixPal(A, B, u);
+    }
+    return out;
+  }
+
+  /** Flying pose generator (pure function of t). */
+  function flyPose(t, o = {}) {
+    const f = o.freq ?? 2.2, amp = o.amp ?? 0.85, cen = o.center ?? 3.62, ph = o.phase ?? 0;
+    const th = (tt) => cen + amp * Math.cos(TAU * (f * tt + ph));
+    return {
+      pose: { spread: o.spread ?? 1, theta: th(t), talons: o.talons ?? 0, pitch: o.pitch ?? 0,
+              tailSpread: o.tail ?? 0.5, jaw: o.jaw ?? 0, grip: 0, wingScale: o.wingScale ?? 1,
+              headRot: o.headRot ?? 0, neck: o.neck ?? 0 },
+      lag: th(t - 0.07),
+    };
+  }
+
+  /**
+   * Draw a bird at (x,y) travelling along `heading` (radians; 0 = right).
+   * Rig faces +x after the flip, so heading rotates the whole bird.
+   */
+  function bird(c, x, y, scale, heading, fp, opt = {}) {
+    const R = S.rigFromPose(fp.pose, fp.lag);
+    c.save();
+    c.translate(x, y);
+    c.rotate(heading);
+    c.scale(-1, 1);                                   // drawBird faces left; flip to face right
+    K.drawBird(c, { x: 0, y: 0, scale, pitch: 0 }, R, opt);
+    c.restore();
+    return R;
+  }
+
+  /** Flame tongues around a point (local coords). */
+  function flame(c, x, y, r, t, seed, a = 1) {
+    c.save(); c.translate(x, y); c.globalAlpha *= a;
+    const layers = [['#ff3d1a', 1], ['#ff9a1c', 0.72], ['#ffe45a', 0.45], ['#fffbe0', 0.22]];
+    for (const [col, k] of layers) {
+      c.fillStyle = col;
+      for (let i = 0; i < 4; i++) {
+        const fl = 0.75 + 0.35 * Math.sin(t * 17 + i * 2.1 + seed * 3.3);
+        const dx = (i - 1.5) * r * 0.35 * k + Math.sin(t * 9 + i + seed) * r * 0.08;
+        const h = r * 1.8 * k * fl;
+        c.beginPath();
+        c.moveTo(dx - r * 0.38 * k, 0);
+        c.quadraticCurveTo(dx - r * 0.42 * k, -h * 0.55, dx + Math.sin(t * 11 + i) * r * 0.2, -h);
+        c.quadraticCurveTo(dx + r * 0.42 * k, -h * 0.55, dx + r * 0.38 * k, 0);
+        c.arc(dx, 0, r * 0.38 * k, 0, Math.PI);
+        c.fill();
+      }
+    }
+    c.restore();
+  }
+
+  function embers(c, x, y, w, h, t, n, seed, col = '#ffb347') {
+    c.save(); c.fillStyle = col;
+    for (let i = 0; i < n; i++) {
+      const sp = 60 + 90 * hash(i, seed, 1);
+      const life = h / sp;
+      const k = ((t + hash(i, seed, 2) * life) % life) / life;
+      const px = x + (hash(i, seed, 3) - 0.5) * w + Math.sin(t * 2 + i) * 18 * k;
+      const py = y - k * h;
+      c.globalAlpha = (1 - k) * 0.9;
+      c.beginPath(); c.arc(px, py, 2 + 3 * hash(i, seed, 4), 0, TAU); c.fill();
+    }
+    c.restore();
+  }
+
+  function smoke(c, pts, t, base = 'rgba(70,60,60,') {
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i], a = (1 - i / pts.length) * 0.45;
+      c.fillStyle = base + a + ')';
+      c.beginPath(); c.arc(p.x, p.y, 18 + i * 3.2, 0, TAU); c.fill();
+    }
+  }
+
+  // ================================================================ backgrounds
+  function skyGrad(c, stops) {
+    const g = c.createLinearGradient(0, 0, 0, H);
+    for (const [o, col] of stops) g.addColorStop(o, col);
+    c.fillStyle = g; c.fillRect(-200, -200, W + 400, H + 400);
+  }
+
+  function ridge(c, baseY, amp, seed, pal, off = 0, snow = false, jag = 1) {
+    const p = new Path2D();
+    p.moveTo(-200, H + 300);
+    const pts = [];
+    for (let x = -200; x <= W + 200; x += 18) {
+      const n = noise1(x + off, seed);
+      const peak = Math.pow(Math.abs(Math.sin((x + off) * 0.0042 + seed)), 1.6 * jag);
+      const y = baseY - amp * (0.45 + 0.35 * n + 0.6 * peak);
+      pts.push([x, y]); p.lineTo(x, y);
+    }
+    p.lineTo(W + 200, H + 300); p.closePath();
+    cel3(c, p, pal, { x: 0.6, y: -0.8 }, 18, 6, 0);
+    if (snow) {
+      c.save(); c.clip(p);
+      const cap = new Path2D();
+      cap.moveTo(-200, -400);
+      for (const [x, y] of pts) cap.lineTo(x, y + 60 + 30 * Math.sin(x * 0.05));
+      cap.lineTo(W + 200, -400); cap.closePath();
+      c.fillStyle = 'rgba(255,255,255,0.92)'; c.fill(cap);
+      c.restore();
+    }
+  }
+
+  function cloudPuffs(c, list, pal, L = LW) {
+    for (const [x, y, s, seed] of list) cel3(c, S.cumulus(x, y, s, seed), pal, L, s * 0.12, s * 0.04, 0);
+  }
+
+  function tree(c, x, y, s, seed, pal = PAL.green, trunk = PAL.wood) {
+    c.save(); c.translate(x, y); c.scale(s, s);
+    cel3(c, S.poly([[-16, 0], [16, 0], [10, -170], [-10, -170]]), trunk, LW, 5, 2, 3);
+    const blobs = [];
+    for (let i = 0; i < 9; i++) blobs.push({ x: (hash(seed, i, 1) - 0.5) * 170, y: -190 - hash(seed, i, 2) * 150, r: 50 + 30 * hash(seed, i, 3) });
+    const fol = S.puffs(blobs);
+    c.lineWidth = 7; c.strokeStyle = INK; c.lineJoin = 'round'; c.stroke(fol);
+    cel3(c, fol, pal, LW, 18, 6, 0);
+    c.save(); c.clip(fol); c.strokeStyle = pal[2]; c.lineWidth = 3;
+    for (let i = 0; i < 9; i++) { const b = blobs[i]; c.beginPath(); c.arc(b.x + 8, b.y + 10, b.r * 0.7, 0.2, 1.6); c.stroke(); }
+    c.restore();
+    c.restore();
+  }
+
+  function godRays(c, x, y, t, alpha = 0.12, n = 12) {
+    c.save(); c.globalCompositeOperation = 'screen';
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * TAU + 0.05 * Math.sin(t * 0.5 + i);
+      const w = 0.04 + 0.05 * hash(i, 77), len = 1800;
+      const g = c.createRadialGradient(x, y, 40, x, y, len);
+      g.addColorStop(0, `rgba(255,240,200,${alpha})`); g.addColorStop(1, 'rgba(255,240,200,0)');
+      c.fillStyle = g; c.beginPath(); c.moveTo(x, y);
+      c.lineTo(x + Math.cos(a - w) * len, y + Math.sin(a - w) * len); c.lineTo(x + Math.cos(a + w) * len, y + Math.sin(a + w) * len);
+      c.closePath(); c.fill();
+    }
+    c.restore();
+  }
+
+  function sea(c, y0, t, top = '#2b86c8', bottom = '#0b3a6e') {
+    const g = c.createLinearGradient(0, y0, 0, H);
+    g.addColorStop(0, top); g.addColorStop(1, bottom);
+    c.fillStyle = g; c.fillRect(-200, y0, W + 400, H - y0 + 300);
+    c.strokeStyle = 'rgba(255,255,255,0.35)'; c.lineWidth = 3; c.lineCap = 'round';
+    for (let i = 0; i < 26; i++) {
+      const yy = y0 + 20 + i * i * 2.2;
+      const xx = ((hash(i, 5) * W + t * (20 + i * 3)) % (W + 200)) - 100;
+      const l = 30 + i * 4;
+      c.beginPath(); c.moveTo(xx - l, yy); c.quadraticCurveTo(xx, yy - 5, xx + l, yy); c.stroke();
+    }
+  }
+
+  function nameTag(c, text, x, y, u, color = '#ffd54a') {
+    if (u <= 0) return;
+    const a = smooth(u * 4) * (1 - smooth((u - 2.2) * 3));
+    if (a <= 0) return;
+    c.save(); c.globalAlpha = a;
+    c.translate(x, y - 20 * (1 - smooth(u * 4)));
+    c.font = "64px 'Rozha One'"; c.textAlign = 'center'; c.textBaseline = 'middle';
+    const w = c.measureText(text).width + 60;
+    c.fillStyle = 'rgba(20,10,30,0.72)';
+    c.beginPath(); c.roundRect(-w / 2, -44, w, 88, 44); c.fill();
+    c.strokeStyle = color; c.lineWidth = 4; c.stroke();
+    c.fillStyle = color; c.fillText(text, 0, 4);
+    c.restore();
+  }
+
+  function cueStart(sc, k) { return sc.cues[Math.min(k, sc.cues.length - 1)].start; }
+
+  // ================================================================ SCENE 0: title
+  function scene0(c, u) {
+    skyGrad(c, [[0, '#07051a'], [0.45, '#2a1450'], [0.75, '#a2385a'], [1, '#f39a4a']]);
+    for (let i = 0; i < 90; i++) {
+      c.fillStyle = `rgba(255,255,240,${0.4 + 0.5 * hash(i, 2)})`;
+      const tw = 0.6 + 0.4 * Math.sin(u * 3 + i);
+      c.beginPath(); c.arc(hash(i, 3) * W, hash(i, 4) * H * 0.6, 1 + 2 * hash(i, 5) * tw, 0, TAU); c.fill();
+    }
+    ridge(c, 1640, 220, 1.3, ['#5a2c5a', '#2c1236', '#14081c'], u * 10, false);
+    ridge(c, 1800, 160, 4.1, ['#3a1a3a', '#1a0a22', '#0a0410'], u * 22, false);
+    // two silhouettes crossing the dawn
+    for (const [k, dy, s] of [[0, 0, 0.55], [1, 120, 0.45]]) {
+      const fp = flyPose(u + k * 0.3, { freq: 1.6, amp: 0.8 });
+      c.save(); c.globalAlpha = 0.95;
+      bird(c, lerp(-200, 1250, (u + k * 0.4) / 3.6), 1150 + dy - u * 40, s, -0.08, fp,
+           { pal: { feather: ['#2a1630', '#1a0c20', '#0a040e'], featherFar: ['#1a0c20', '#10061a', '#05020a'], covert: ['#2a1630', '#1a0c20', '#0a040e'], body: ['#2a1630', '#1a0c20', '#0a040e'], skin: ['#2a1630', '#1a0c20', '#0a040e'], ruff: ['#3a2440', '#2a1630', '#1a0c20'], beak: ['#2a1630', '#1a0c20', '#0a040e'], leg: ['#2a1630', '#1a0c20', '#0a040e'] }, collar: false });
+      c.restore();
+    }
+    const a = smooth(u / 0.8);
+    c.save(); c.globalAlpha = a;
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.font = "150px 'Rozha One'";
+    const g = c.createLinearGradient(0, 560, 0, 860);
+    g.addColorStop(0, '#fff3b0'); g.addColorStop(0.5, '#ffc83a'); g.addColorStop(1, '#d4800c');
+    c.lineJoin = 'round';
+    c.strokeStyle = '#2a0a10'; c.lineWidth = 18;
+    c.strokeText('सम्पाती', W / 2, 600 - 30 * (1 - a)); c.strokeText('और जटायु', W / 2, 770 - 30 * (1 - a));
+    c.fillStyle = g;
+    c.fillText('सम्पाती', W / 2, 600 - 30 * (1 - a)); c.fillText('और जटायु', W / 2, 770 - 30 * (1 - a));
+    c.globalAlpha = smooth((u - 0.6) / 0.8);
+    c.font = "700 50px 'Noto Sans Devanagari'"; c.fillStyle = '#ffe9c8';
+    c.fillText('दो भाइयों की अमर कथा', W / 2, 920);
+    c.restore();
+  }
+
+  // ================================================================ SCENE 1: the brothers at dawn
+  function scene1(c, u, sc) {
+    const cam = 1 + u * 0.012;
+    skyGrad(c, [[0, '#2c4aa8'], [0.35, '#e9718a'], [0.6, '#ffb36a'], [0.78, '#ffe2a6'], [1, '#ffd9a0']]);
+    // rising sun (Arun's dawn)
+    const sy = 1180 - u * 25;
+    const g = c.createRadialGradient(540, sy, 20, 540, sy, 700);
+    g.addColorStop(0, 'rgba(255,250,220,1)'); g.addColorStop(0.15, 'rgba(255,220,140,0.7)'); g.addColorStop(1, 'rgba(255,170,90,0)');
+    c.fillStyle = g; c.fillRect(0, 0, W, H);
+    c.fillStyle = '#fff8dc'; c.beginPath(); c.arc(540, sy, 110, 0, TAU); c.fill();
+    godRays(c, 540, sy, u, 0.1);
+    c.save(); c.translate(540, 960); c.scale(cam, cam); c.translate(-540, -960);
+    cloudPuffs(c, [[120 - u * 12, 760, 120, 3], [960 - u * 8, 640, 140, 5]], ['#fff2e0', '#ffd6c0', '#e0a0a8']);
+    ridge(c, 1330, 360, 2.2, ['#d8c8f0', '#8a7ab8', '#4e4280'], u * 6, true, 1.4);
+    ridge(c, 1520, 300, 5.3, ['#b4a0d8', '#62528f', '#2e2456'], u * 14, true, 1.2);
+    ridge(c, 1760, 220, 8.8, ['#7a6aa8', '#3a2c62', '#1a1236'], u * 28, false);
+    // brothers flying right, side by side
+    const sp = { x: 360 + u * 26, y: 780 + 22 * Math.sin(u * 1.3) };
+    const ja = { x: 640 + u * 24, y: 1010 + 18 * Math.sin(u * 1.5 + 1) };
+    bird(c, sp.x, sp.y, 0.9, -0.05, flyPose(u, { freq: 1.5, amp: 0.8 }), { pal: BIRD.sampati });
+    bird(c, ja.x, ja.y, 0.72, -0.08, flyPose(u, { freq: 1.8, amp: 0.85, phase: 0.4 }), { pal: BIRD.jatayu });
+    c.restore();
+    nameTag(c, 'सम्पाती', 420 + u * 26, 520, u - cueStart(sc, 1) + 0.1);
+    nameTag(c, 'जटायु', 700 + u * 24, 1250, u - cueStart(sc, 2) + 0.1, '#ffe7b0');
+  }
+
+  // ================================================================ SCENE 2: race to the sun
+  function scene2(c, u, sc) {
+    skyGrad(c, [[0, '#ff8c2a'], [0.25, '#ffb84a'], [0.55, '#4a8ae0'], [1, '#2252b0']]);
+    const sr = 190 + u * 9;
+    godRays(c, 540, 300, u, 0.16, 16);
+    // clouds rush downward: they are climbing
+    for (let i = 0; i < 7; i++) {
+      const y = ((hash(i, 9) * 2400 + u * (500 + 300 * hash(i, 8))) % 2600) - 400;
+      if (y < 560) continue;
+      cloudPuffs(c, [[hash(i, 7) * W, y, 90 + 80 * hash(i, 6), i + 20]], ['#ffffff', '#f3f6ff', '#b8c8ea']);
+    }
+    C.surya(c, 540, 300, sr, u, 'calm', LW);
+    // vertical speed lines
+    c.save(); c.strokeStyle = 'rgba(255,255,255,0.55)'; c.lineCap = 'round';
+    const f = Math.round(u * FPS);
+    for (let i = 0; i < 40; i++) {
+      const x = hash(f, i, 1) * W, y = hash(f, i, 2) * H, l = 200 + 500 * hash(f, i, 3);
+      c.lineWidth = 1 + 4 * hash(f, i, 4); c.beginPath(); c.moveTo(x, y); c.lineTo(x, y + l); c.stroke();
+    }
+    c.restore();
+    // jockeying for the lead
+    const lead = Math.sin(u * 1.1);
+    const jy = 1300 - u * 55 + lead * 80, sy = 1330 - u * 55 - lead * 80;
+    const s = lerp(0.85, 0.6, u / sc.length);
+    bird(c, 290 + 30 * Math.sin(u * 2), sy, s * 1.1, -1.45, flyPose(u, { freq: 2.8, amp: 0.95 }), { pal: BIRD.sampati });
+    bird(c, 800 + 30 * Math.sin(u * 2.3 + 1), jy, s, -1.6, flyPose(u, { freq: 3.1, amp: 0.95, phase: 0.3 }), { pal: BIRD.jatayu });
+  }
+
+  // ================================================================ SCENE 3: the sacrifice
+  function scene3(c, u, sc) {
+    const cBurn = cueStart(sc, 1), cShield = cueStart(sc, 2), cSaved = cueStart(sc, 4), cSBurn = cueStart(sc, 5), cFall = cueStart(sc, 6);
+    if (u < cFall - 0.2) {
+      // ---- near the sun ----
+      const heat = smooth(u / 2);
+      skyGrad(c, [[0, mixHex('#ff8c2a', '#ff3a10', heat)], [0.4, mixHex('#ffb84a', '#ff7a20', heat)], [1, mixHex('#4a8ae0', '#a04040', heat)]]);
+      const shake = 6 * heat;
+      const fr = Math.round(u * FPS);
+      c.save(); c.translate((hash(fr, 1) - 0.5) * shake, (hash(fr, 2) - 0.5) * shake);
+      godRays(c, 540, 180, u, 0.25, 18);
+      C.surya(c, 540, 180, 330, u, 'fierce', LW);
+      // heat shimmer bands
+      c.fillStyle = `rgba(255,120,40,${0.12 * heat})`;
+      for (let i = 0; i < 6; i++) { const y = 500 + i * 220 + Math.sin(u * 3 + i) * 30; c.fillRect(0, y, W, 40); }
+      // Jatayu struggling (below), burning from cBurn until shielded
+      const jBurn = smooth((u - cBurn) / 0.6) * (1 - smooth((u - cShield - 1.2) / 1.2));
+      const jx = 600 + 20 * Math.sin(u * 3), jy = 1150 + 40 * Math.sin(u * 2);
+      const jfp = flyPose(u, { freq: 3.6 + 2 * jBurn, amp: 1.0, jaw: jBurn > 0.2 ? 0.8 : 0.2 });
+      bird(c, jx, jy, 0.82, -1.3 + 0.3 * jBurn * Math.sin(u * 7), jfp, {
+        pal: mixBird(BIRD.jatayu, BIRD.burnt, jBurn * 0.5),
+        after: (cc, R) => { if (jBurn > 0.02) for (const w of [R.near, R.far]) { flame(cc, w.Tip.x, w.Tip.y, 34, u, 1, jBurn); flame(cc, w.Wr.x, w.Wr.y, 26, u, 2, jBurn); } },
+      });
+      // Sampati sweeps over him and spreads his wings toward the sun
+      const sh = smooth((u - cShield) / 1.0);
+      const sBurn = smooth((u - cSBurn + 0.3) / 0.8);
+      const sx = lerp(220, 560, sh), sy = lerp(1350, 830, sh);
+      const sfp = sh > 0.6
+        ? { pose: { spread: 1, theta: 4.35 + 0.05 * Math.sin(u * 8), talons: 0.2, pitch: 0, tailSpread: 1, jaw: sBurn > 0.3 ? 0.9 : 0, grip: 0, wingScale: 1.25 }, lag: 4.35 }
+        : flyPose(u, { freq: 3, amp: 1, wingScale: 1.2 });
+      bird(c, sx, sy, 1.0, lerp(-1.2, -0.25, sh), sfp, {
+        pal: mixBird(BIRD.sampati, BIRD.burnt, sBurn),
+        after: (cc, R) => {
+          if (sBurn > 0.02) for (const w of [R.near, R.far]) {
+            for (let k = 0; k < 10; k += 2) flame(cc, w.prim[k].x, w.prim[k].y, 30, u, k, sBurn);
+            for (let k = 1; k < 10; k += 3) flame(cc, w.sec[k].x, w.sec[k].y, 24, u, k + 5, sBurn);
+          }
+        },
+      });
+      // shadow over Jatayu once shielded
+      if (sh > 0.6) {
+        const shd = c.createRadialGradient(jx, jy, 20, jx, jy, 320);
+        shd.addColorStop(0, `rgba(40,10,60,${0.3 * (sh - 0.6) / 0.4})`); shd.addColorStop(1, 'rgba(40,10,60,0)');
+        c.fillStyle = shd; c.fillRect(jx - 320, jy - 320, 640, 640);
+      }
+      if (sBurn > 0) embers(c, sx, sy - 100, 500, 600, u, 40, 9);
+      c.restore();
+      // fade to white at the cut
+      const wf = smooth((u - (cFall - 0.6)) / 0.4);
+      if (wf > 0) { c.fillStyle = `rgba(255,240,220,${wf})`; c.fillRect(0, 0, W, H); }
+    } else {
+      // ---- the fall to Vindhya ----
+      const v = clamp((u - cFall + 0.2) / (sc.length - cFall));
+      skyGrad(c, [[0, '#f08a3a'], [0.45, '#f6c07a'], [1, '#9ab8d8']]);
+      ridge(c, 1450, 260, 3.3, ['#b4a08c', '#6e5a48', '#3a2c20'], 0, false, 1.0);
+      ridge(c, 1700, 420, 7.7, ['#9a7c5c', '#5c4026', '#2c1c0e'], 120, false, 0.7);   // Vindhya
+      const fall = Math.min(1, v * 1.25);
+      const px = lerp(780, 520, fall) + 80 * Math.sin(fall * 8), py = lerp(-120, 1360, fall * fall);
+      // smoke trail from earlier positions
+      const trail = [];
+      for (let k = 1; k <= 16; k++) {
+        const fk = Math.max(0, fall - k * 0.025);
+        trail.push({ x: lerp(780, 520, fk) + 80 * Math.sin(fk * 8), y: lerp(-120, 1360, fk * fk) - 10 });
+      }
+      smoke(c, trail, u);
+      if (fall < 1) {
+        bird(c, px, py, 0.85, 1.4 + fall * 6, { pose: { spread: 0.35, theta: 3.4, talons: 0.3, pitch: 0, tailSpread: 0.3, jaw: 0.7, grip: 0, wingScale: 0.8 }, lag: 3.6 },
+          { pal: BIRD.burnt, after: (cc, R) => flame(cc, R.near.Tip.x, R.near.Tip.y, 22, u, 3, 0.7) });
+      } else {
+        // crash dust
+        const d = smooth((v - 0.8) / 0.2);
+        c.fillStyle = `rgba(190,160,120,${0.85 * (1 - d * 0.6)})`;
+        c.fill(S.puffs([{ x: 520, y: 1360, r: 60 + 200 * d }, { x: 420, y: 1390, r: 50 + 150 * d }, { x: 640, y: 1380, r: 50 + 160 * d }]));
+      }
+      // Jatayu glides away safe in the distance
+      bird(c, lerp(300, -100, v), lerp(420, 300, v), 0.35, Math.PI + 0.1, flyPose(u, { freq: 2, amp: 0.7 }), { pal: BIRD.jatayu });
+      const wf = 1 - smooth((u - cFall + 0.2) / 0.4);
+      if (wf > 0) { c.fillStyle = `rgba(255,240,220,${wf})`; c.fillRect(0, 0, W, H); }
+    }
+  }
+
+  // ================================================================ SCENE 4: Ravana and Sita
+  const RAVANA = { skin: PAL.ravanaSkin, garment: PAL.black, hair: 'crown', crown: 'ravana', mustache: true, tilak: 'shaiv', extraHeads: true, iris: '#8a0d0d', uttariya: PAL.purple };
+  const SITA = { female: true, skin: PAL.sitaSkin, garment: PAL.saree, blouse: PAL.pitambar, hair: 'long', pallu: PAL.saree, tilak: 'bindi', nosering: true };
+  const RAMA = { skin: PAL.blueSkin, garment: PAL.pitambar, hair: 'jata', tilak: 'vaishnav', uttariya: PAL.saffron, iris: '#2a1a10' };
+  const LAKSHMAN = { skin: PAL.fairSkin, garment: PAL.saffron, hair: 'jata', tilak: 'vaishnav', uttariya: PAL.green };
+
+  function vimanWithCast(c, u, vs, swordSwing, sitaReach, ravMouth) {
+    K.viman(c, u, vs);
+    c.save();
+    c.translate(vs.x, vs.y); c.rotate(vs.rot);
+    c.beginPath(); c.rect(-400, -900, 800, 790); c.clip();         // hide legs behind the hull rim
+    c.save(); c.translate(-95, -150); c.scale(0.36, 0.36);
+    C.person(c, SITA, { stance: 'kneel', t: u, armL: [3.4 - 0.4 * sitaReach, -0.3], armR: [2.9 - 0.6 * sitaReach, -0.2], head: { mood: 'sad', mouth: 0.4 + 0.3 * Math.sin(u * 6), turn: -0.5, look: -1 } }, LW);
+    c.restore();
+    c.save(); c.translate(95, -185); c.scale(0.4, 0.4);
+    C.person(c, RAVANA, { stance: 'stand', t: u, armL: [2.6, 0.4], armR: [swordSwing, -0.4], props: { sword: swordSwing - 0.5 }, head: { mood: 'angry', mouth: ravMouth, turn: 0.3 } }, LW);
+    c.restore();
+    c.restore();
+  }
+
+  function scene4(c, u, sc) {
+    const cSee = cueStart(sc, 1), cAttack = cueStart(sc, 4), cSword = cueStart(sc, 5), cCut = cueStart(sc, 6);
+    skyGrad(c, [[0, '#3a7ad8'], [0.5, '#8cc8f0'], [0.75, '#cfeaf0'], [1, '#6a9a5a']]);
+    cloudPuffs(c, [[200 - u * 6, 520, 130, 31], [900 - u * 4, 430, 110, 33]], ['#ffffff', '#f2f6ff', '#b3c8ec']);
+    // years pass: overlay text
+    const yrs = smooth(u / 0.5) * (1 - smooth((u - cSee + 0.2) / 0.5));
+    // forest (Panchavati)
+    ridge(c, 1500, 160, 9.1, ['#8ab87a', '#4a7a42', '#24481e'], 0, false);
+    for (let i = 0; i < 7; i++) tree(c, i * 180 - 40, 1720 + (i % 2) * 40, 1.1 + 0.2 * hash(i, 41), i + 40);
+    // the big tree Jatayu perches on
+    tree(c, 230, 1640, 1.9, 99, ['#7ac06a', '#3c8a3a', '#1e5222']);
+    const vT = clamp((u - cSee + 0.3) / (sc.length - cSee));
+    let vs = { x: lerp(1450, 560, smooth(vT * 1.6)), y: 930 + 10 * Math.sin(u * 1.5), rot: 0.02 * Math.sin(u), scale: 1 };
+    if (u > cCut) vs.x = lerp(560, -500, smooth((u - cCut) / 2.8));
+    // Ravana's sword: raised, then the slash at the cut
+    const sw = u < cSword ? 2.8 : u < cCut - 0.15 ? lerp(2.8, -1.2, smooth((u - cSword) / (cCut - 0.15 - cSword))) : lerp(-1.2, 1.4, smooth((u - cCut + 0.15) / 0.25));
+    c.save(); c.translate(vs.x, vs.y); c.scale(0.78, 0.78); c.translate(-vs.x, -vs.y);
+    vimanWithCast(c, u, vs, sw, smooth((u - cSee) / 1.5), u > cAttack ? 0.6 : 0.2);
+    c.restore();
+
+    // Jatayu: perched → attacks → wings cut → falls
+    const perch = { x: 250, y: 900 };
+    let jx, jy, hd, fp, opt = { pal: BIRD.jatayuOld };
+    if (u < cAttack - 0.4) {
+      jx = perch.x; jy = perch.y; hd = -0.1;
+      const look = smooth((u - cSee) / 0.6);
+      fp = { pose: { spread: 0.05, theta: 3.0, talons: 0.15, pitch: 0, tailSpread: 0.3, jaw: 0, grip: 1, headRot: -0.4 * look, neck: -0.2 * look }, lag: 3.0 };
+      opt.sad = false;
+    } else if (u < cCut) {
+      const a = smooth((u - cAttack + 0.4) / 1.3);
+      jx = lerp(perch.x, vs.x - 150, a); jy = lerp(perch.y, vs.y - 370, a) - Math.sin(a * Math.PI) * 220;
+      hd = lerp(-0.6, -0.1, a);
+      fp = flyPose(u, { freq: 3.2, amp: 1, jaw: 0.8, talons: a });
+    } else {
+      const f = clamp((u - cCut) / 2.2);
+      jx = lerp(vs.x - 150, 420, f); jy = lerp(vs.y - 370, 1500, f * f);
+      hd = 1.2 + f * 2.2;
+      fp = { pose: { spread: 0.4, theta: 3.3 + 0.3 * Math.sin(u * 10), talons: 0.4, pitch: 0, tailSpread: 0.4, jaw: 0.9, grip: 0, wingScale: 0.45 }, lag: 3.4 };
+    }
+    bird(c, jx, jy, 0.95, hd, fp, opt);
+
+    // clash flash when he hits Ravana, and the slash
+    const hit = u - (cAttack + 0.9);
+    if (hit > 0 && hit < 0.4) { c.save(); c.globalAlpha = 1 - hit / 0.4; K.starBurst(c, vs.x - 90, vs.y - 340, 40, 180, 10, hit); c.fillStyle = '#fff4b8'; c.fill(); c.restore(); }
+    const cut = u - cCut;
+    if (cut > -0.15 && cut < 0.5) {
+      c.save(); c.globalAlpha = 1 - smooth(cut / 0.5);
+      c.strokeStyle = '#ffffff'; c.lineWidth = 26; c.lineCap = 'round';
+      c.beginPath(); c.arc(vs.x - 60, vs.y - 380, 230, -2.6, 0.2); c.stroke();
+      c.strokeStyle = '#ff3040'; c.lineWidth = 8; c.stroke();
+      c.restore();
+    }
+    // feathers burst at the cut
+    if (cut > 0) {
+      for (let i = 0; i < 26; i++) {
+        const a = hash(i, 51) * TAU, r = (240 + 300 * hash(i, 52)) * (1 - Math.exp(-2.5 * cut)) / 2.5;
+        const fx = vs.x - 150 + Math.cos(a) * r, fy = vs.y - 370 + Math.sin(a) * r + 80 * cut * cut;
+        c.save(); c.globalAlpha = 1 - smooth((cut - 1.6) / 0.8);
+        K.feather(c, { x: fx, y: fy, a: a + cut * 3, len: 40, w: 12 }, BIRD.jatayuOld.feather, LW, 1.8);
+        c.restore();
+      }
+    }
+    if (yrs > 0) {
+      c.fillStyle = `rgba(10,6,20,${0.55 * yrs})`; c.fillRect(0, 0, W, H);
+      c.save(); c.globalAlpha = yrs; c.font = "96px 'Rozha One'"; c.textAlign = 'center'; c.fillStyle = '#ffe2a0';
+      c.fillText('बरसों बाद...', W / 2, 820); c.restore();
+    }
+    // impact frames at the cut (black/white then red)
+    const fr = Math.round((u - cCut) * FPS);
+    if (fr >= 0 && fr < 4) return { impact: fr };
+  }
+
+  // ================================================================ SCENE 5: Rama, Lakshmana, last rites
+  function scene5(c, u, sc) {
+    const cSpeak = cueStart(sc, 1), cSouth = cueStart(sc, 2), cRites = cueStart(sc, 3);
+    if (u < cRites - 0.3) {
+      skyGrad(c, [[0, '#4a2a6a'], [0.4, '#d8664a'], [0.7, '#f6b06a'], [1, '#3a5a2a']]);
+      const g = c.createRadialGradient(540, 1000, 40, 540, 1000, 600);
+      g.addColorStop(0, 'rgba(255,220,150,0.8)'); g.addColorStop(1, 'rgba(255,200,120,0)');
+      c.fillStyle = g; c.fillRect(0, 0, W, H);
+      for (let i = 0; i < 6; i++) tree(c, i * 210 - 60, 1180 + (i % 2) * 30, 1.3, 60 + i, ['#5a7a3a', '#2e4a22', '#14260e']);
+      const gr = c.createLinearGradient(0, 1150, 0, H); gr.addColorStop(0, '#5a6a2a'); gr.addColorStop(1, '#2a3412');
+      c.fillStyle = gr; c.fillRect(0, 1150, W, H);
+      const zoom = 1 + u * 0.015;
+      c.save(); c.translate(540, 1200); c.scale(zoom, zoom); c.translate(-540, -1200);
+      // Lakshmana standing behind, sad
+      c.save(); c.translate(250, 1080); c.scale(0.95, 0.95);
+      C.person(c, LAKSHMAN, { stance: 'stand', t: u, props: { bow: 'right', quiver: true }, armL: [1.9, 0.6], head: { mood: 'sad', tilt: 0.12, look: 1 } }, LW);
+      c.restore();
+      // Rama kneeling, cradling Jatayu
+      c.save(); c.translate(640, 1240); c.scale(1.05, 1.05);
+      C.person(c, RAMA, { stance: 'kneel', t: u, props: { quiver: true }, armL: [2.0, -0.9], armR: [1.4, 0.9], head: { mood: 'sad', tilt: 0.25, eyes: u > cSouth + 1.5 ? 'closed' : 'open', look: -0.5 } }, LW);
+      c.restore();
+      // Jatayu across Rama's lap, wings cut
+      const speak = u > cSpeak && u < cSouth + 1.6 ? 0.35 + 0.35 * Math.sin(u * 14) : 0;
+      const dead = u > cSouth + 1.5;
+      bird(c, 560, 1330, 1.1, 0.12, { pose: { spread: 0.25, theta: 2.9, talons: 0.1, pitch: 0, tailSpread: 0.3, jaw: speak, grip: 0, wingScale: 0.45, headRot: dead ? 0.6 : -0.15, neck: dead ? 0.5 : 0 }, lag: 2.9 },
+        { pal: BIRD.jatayuOld, eyeClosed: dead, sad: true });
+      c.restore();
+      // "south" pointer
+      const so = smooth((u - cSouth) / 0.5) * (1 - smooth((u - cSouth - 2.2) / 0.5));
+      if (so > 0) {
+        c.save(); c.globalAlpha = so; c.translate(780, 560);
+        c.fillStyle = 'rgba(255,230,150,0.9)'; c.strokeStyle = '#5a2a0a'; c.lineWidth = 5;
+        c.beginPath(); c.moveTo(-80, 0); c.lineTo(20, -50); c.lineTo(20, -22); c.lineTo(120, -22); c.lineTo(120, 22); c.lineTo(20, 22); c.lineTo(20, 50); c.closePath(); c.fill(); c.stroke();
+        c.font = "64px 'Rozha One'"; c.textAlign = 'center'; c.fillStyle = '#ffe2a0'; c.strokeStyle = '#2a0a10'; c.lineWidth = 10;
+        c.strokeText('दक्षिण दिशा', 30, -90); c.fillText('दक्षिण दिशा', 30, -90);
+        c.restore();
+      }
+    } else {
+      // funeral pyre at dusk
+      const v = u - cRites + 0.3;
+      skyGrad(c, [[0, '#120a2a'], [0.45, '#5a1e3a'], [0.7, '#c85a2a'], [1, '#1a1208']]);
+      const glow = c.createRadialGradient(540, 1150, 30, 540, 1150, 800);
+      glow.addColorStop(0, 'rgba(255,160,60,0.85)'); glow.addColorStop(1, 'rgba(255,90,30,0)');
+      c.fillStyle = glow; c.fillRect(0, 0, W, H);
+      c.fillStyle = '#1a120a'; c.fillRect(0, 1260, W, H);
+      // logs
+      for (let i = 0; i < 5; i++) {
+        c.save(); c.translate(540, 1240 - i * 22); c.rotate(i % 2 ? 0.08 : -0.08);
+        cel3(c, S.poly([[-200 + i * 18, -14], [200 - i * 18, -14], [200 - i * 18, 14], [-200 + i * 18, 14]]), PAL.wood, LW, 4, 2, 3);
+        c.restore();
+      }
+      const fh = smooth(v / 1.2);
+      for (let i = 0; i < 7; i++) flame(c, 380 + i * 54, 1150, 60 * fh * (0.8 + 0.4 * hash(i, 71)), u, i + 30);
+      embers(c, 540, 1100, 400, 900, u, 60, 12);
+      smoke(c, Array.from({ length: 14 }, (_, k) => ({ x: 540 + Math.sin(u * 0.8 + k * 0.4) * 40 * k / 4, y: 1000 - k * 60 })), u, 'rgba(60,50,60,');
+      // Rama and Lakshmana, hands folded
+      for (const [x, spec, s] of [[230, LAKSHMAN, 0.9], [860, RAMA, 0.95]]) {
+        c.save(); c.translate(x, 1000); c.scale(s, s);
+        C.person(c, spec, { stance: 'stand', t: u, armL: [1.63, -2.15], armR: [1.51, 1.11], head: { mood: 'sad', eyes: 'closed', tilt: x < 540 ? 0.08 : -0.08 } }, { x: x < 540 ? 0.9 : -0.9, y: -0.3 });
+        c.restore();
+      }
+      const fin = 1 - smooth(v / 0.4);
+      if (fin > 0) { c.fillStyle = `rgba(0,0,0,${fin})`; c.fillRect(0, 0, W, H); }
+    }
+  }
+
+  // ================================================================ SCENE 6: Vindhya — the search party meets Sampati
+  function scene6(c, u, sc) {
+    const cName = cueStart(sc, 4), cShock = cueStart(sc, 5), cTears = cueStart(sc, 6);
+    const pan = smooth((u - cName + 1.2) / 1.6);           // camera tilts up to Sampati
+    skyGrad(c, [[0, '#4a90e0'], [0.5, '#9ad0f0'], [1, '#e0f0f0']]);
+    c.save(); c.translate(0, lerp(-380, 260, pan));
+    cloudPuffs(c, [[200, 300, 110, 61], [880, 240, 90, 62]], ['#ffffff', '#f2f6ff', '#b3c8ec']);
+    sea(c, 1500, u);
+    // Vindhya cliffs
+    const cliff = new Path2D();
+    cliff.moveTo(-100, 2400); cliff.lineTo(-100, 900); cliff.lineTo(200, 760); cliff.lineTo(380, 520); cliff.lineTo(560, 470);
+    cliff.lineTo(760, 560); cliff.lineTo(900, 700); cliff.lineTo(1000, 1200); cliff.lineTo(1180, 1400); cliff.lineTo(1180, 2400); cliff.closePath();
+    cel3(c, cliff, ['#c8a886', '#8a6a4c', '#4e3826'], LW, 30, 8, 4);
+    c.strokeStyle = 'rgba(60,40,25,0.5)'; c.lineWidth = 3;
+    for (let i = 0; i < 18; i++) { const x = hash(i, 81) * W, y = 700 + hash(i, 82) * 1200; c.beginPath(); c.moveTo(x, y); c.lineTo(x + 40, y + 60); c.stroke(); }
+    // cave mouth with Sampati
+    const cave = S.ellipse(620, 640, 230, 150);
+    c.fillStyle = '#20140c'; c.fill(cave); c.strokeStyle = INK; c.lineWidth = 5; c.stroke(cave);
+    const startle = u > cName ? Math.exp(-4 * (u - cName - 0.2)) * Math.sin((u - cName) * 30) : 0;
+    const awake = u > cName;
+    bird(c, 640, 690 + 10 * startle, 0.95, -0.05, { pose: { spread: 0.15, theta: 3.0, talons: 0.2, pitch: 0, tailSpread: 0.3, jaw: u > cShock && u < cShock + 0.6 ? 0.7 : 0, grip: 1, wingScale: 0.35, headRot: awake ? -0.25 + 0.1 * startle : 0.35, neck: awake ? -0.3 : 0.4 }, lag: 3.0 },
+      { pal: mixBird(BIRD.sampati, BIRD.burnt, 0.75), collar: true, eyeClosed: !awake, sad: u > cTears, tear: u > cTears ? (u - cTears) / 1.4 : 0, brow: '#c8c0b8' });
+    if (u > cShock && u < cShock + 1.2) {                       // startle marks
+      c.save(); c.globalAlpha = 1 - smooth((u - cShock - 0.8) / 0.4);
+      c.strokeStyle = '#fff6c0'; c.lineWidth = 8; c.lineCap = 'round';
+      for (const a of [-2.3, -1.9, -1.5]) { c.beginPath(); c.moveTo(760 + Math.cos(a) * 110, 580 + Math.sin(a) * 110); c.lineTo(760 + Math.cos(a) * 170, 580 + Math.sin(a) * 170); c.stroke(); }
+      c.restore();
+    }
+    // ledge with Hanuman, Angad, Jambavan
+    const ledge = S.poly([[-100, 1340], [1180, 1290], [1180, 1440], [-100, 1480]]);
+    cel3(c, ledge, ['#b09070', '#76563c', '#42301e'], LW, 14, 5, 4);
+    const talk = u > cName - 0.8 && u < cName + 0.6;
+    c.save(); c.translate(200, 1330); c.scale(0.62, 0.62); C.vanara(c, 'jambavan', { t: u, mood: 'sad', slump: 0.6, headTilt: -0.1, eyes: awake ? 'open' : 'closed', look: awake ? 1 : 0 }, LW); c.restore();
+    c.save(); c.translate(520, 1310); c.scale(0.66, 0.66); C.vanara(c, 'angad', { t: u, mood: 'sad', slump: 0.4, headTilt: 0.12, mouth: talk ? 0.3 + 0.3 * Math.sin(u * 13) : 0, armUp: talk ? 0.4 : 0 }, LW); c.restore();
+    c.save(); c.translate(860, 1300); c.scale(0.7, 0.7); C.vanara(c, 'hanuman', { t: u, mood: awake ? 'calm' : 'sad', slump: awake ? 0 : 0.5, headTilt: awake ? -0.25 : 0.15, look: -1 }, LW); c.restore();
+    c.restore();
+    // speech bubble "जटायु..."
+    if (talk) {
+      c.save(); c.globalAlpha = smooth((u - cName + 0.8) / 0.3);
+      const by = lerp(-380, 260, pan) + 1000;
+      c.fillStyle = '#fffdf2'; c.strokeStyle = INK; c.lineWidth = 5;
+      c.beginPath(); c.roundRect(380, by - 70, 340, 120, 50); c.fill(); c.stroke();
+      c.beginPath(); c.moveTo(500, by + 48); c.lineTo(520, by + 110); c.lineTo(560, by + 48); c.fill();
+      c.font = "60px 'Rozha One'"; c.textAlign = 'center'; c.fillStyle = '#7a1010'; c.fillText('जटायु...', 550, by + 12);
+      c.restore();
+    }
+  }
+
+  // ================================================================ SCENE 7: divine sight, new wings
+  function scene7(c, u, sc) {
+    const cSee = cueStart(sc, 1), cSita = cueStart(sc, 3), cMoment = cueStart(sc, 4), cWings = cueStart(sc, 5);
+    if (u < cMoment - 0.1) {
+      // close-up of Sampati's eye, then the vision of Lanka
+      skyGrad(c, [[0, '#1a0e2a'], [1, '#3a1a3a']]);
+      const z = 3.2;
+      c.save(); c.translate(540, 1180); c.scale(z, z); c.translate(-126, 66);
+      bird(c, 0, 0, 1, -0.1, { pose: { spread: 0.1, theta: 3.0, talons: 0, pitch: 0, tailSpread: 0.3, jaw: 0, grip: 0, wingScale: 0.35, headRot: -0.3 }, lag: 3.0 },
+        { pal: mixBird(BIRD.sampati, BIRD.burnt, 0.75), noLegs: true, brow: '#c8c0b8' });
+      c.restore();
+      // eye glow
+      const eg = smooth(u / 1.2);
+      const gl = c.createRadialGradient(540, 1180, 10, 540, 1180, 360 * eg + 10);
+      gl.addColorStop(0, 'rgba(255,240,170,0.9)'); gl.addColorStop(1, 'rgba(255,200,80,0)');
+      c.fillStyle = gl; c.fillRect(0, 0, W, H);
+      // vision portal
+      const vr = smooth((u - cSee + 0.3) / 1.2) * 400;
+      if (vr > 4) {
+        c.save();
+        c.beginPath(); c.arc(540, 580, vr, 0, TAU); c.clip();
+        skyGrad(c, [[0, '#f6a85a'], [0.3, '#ffd8a0'], [0.37, '#8ac0e0']]);
+        sea(c, 700, u, '#3a90c8', '#0b4a7e');
+        // Lanka island, golden city
+        const isl = new Path2D(); isl.moveTo(320, 760); isl.quadraticCurveTo(540, 600, 780, 760); isl.closePath();
+        cel3(c, isl, ['#8ac06a', '#4a8a3a', '#245020'], LW, 8, 3, 3);
+        for (let i = 0; i < 7; i++) {
+          const x = 400 + i * 45, h = 60 + 70 * hash(i, 91);
+          cel3(c, S.poly([[x - 14, 700], [x + 14, 700], [x + 8, 700 - h], [x, 700 - h - 30], [x - 8, 700 - h]]), P.gold, LW, 4, 2, 2.5);
+        }
+        // Ashok Vatika: Sita under the Ashoka tree
+        const sz = smooth((u - cSita + 0.6) / 1.2);
+        if (sz > 0) {
+          c.save(); c.globalAlpha = sz;
+          tree(c, 700, 1000, 1.1, 92, ['#8ad86a', '#3c9a3a', '#1e5a22']);
+          c.fillStyle = '#ff5a4a';
+          for (let i = 0; i < 18; i++) { c.beginPath(); c.arc(700 + (hash(i, 93) - 0.5) * 170, 1000 - 190 - hash(i, 94) * 150, 7, 0, TAU); c.fill(); }
+          c.save(); c.translate(560, 1010); c.scale(0.55, 0.55);
+          C.person(c, SITA, { stance: 'sit', t: u, armL: [2.1, -1.2], armR: [1.2, 1.4], head: { mood: 'sad', tilt: 0.12, eyes: 'closed' } }, LW);
+          c.restore();
+          c.restore();
+        }
+        c.restore();
+        c.strokeStyle = '#ffd54a'; c.lineWidth = 12; c.beginPath(); c.arc(540, 580, vr, 0, TAU); c.stroke();
+        c.strokeStyle = 'rgba(255,240,180,0.5)'; c.lineWidth = 30; c.stroke();
+      }
+      const wf = smooth((u - cMoment + 0.5) / 0.4);
+      if (wf > 0) { c.fillStyle = `rgba(255,245,210,${wf})`; c.fillRect(0, 0, W, H); }
+    } else {
+      // new wings burst open in golden light
+      const v = u - cMoment + 0.1;
+      const g = smooth((u - cWings + 0.2) / 1.4);
+      skyGrad(c, [[0, '#2a4aa8'], [0.5, '#f0a860'], [1, '#ffe0a0']]);
+      godRays(c, 540, 820, u, 0.22 + 0.2 * g, 20);
+      const aura = c.createRadialGradient(540, 860, 50, 540, 860, 700);
+      aura.addColorStop(0, `rgba(255,240,180,${0.6 + 0.3 * g})`); aura.addColorStop(1, 'rgba(255,200,100,0)');
+      c.fillStyle = aura; c.fillRect(0, 0, W, H);
+      const fp = { pose: { spread: lerp(0.15, 1, g), theta: lerp(3.0, 4.45, g) + 0.05 * Math.sin(u * 6) * g, talons: 0.2, pitch: 0, tailSpread: lerp(0.3, 1, g), jaw: g > 0.5 && g < 0.95 ? 0.7 : 0, grip: 0, wingScale: lerp(0.35, 1.25, g), headRot: -0.35 * g }, lag: lerp(3.0, 4.4, g) };
+      bird(c, 540, 1000 - 80 * g, 1.25, -0.08, fp, { pal: mixBird(mixBird(BIRD.sampati, BIRD.burnt, 0.75), BIRD.golden, g) });
+      // sparkles
+      c.fillStyle = '#fffbe0';
+      for (let i = 0; i < 40; i++) {
+        const a = hash(i, 101) * TAU, r = 200 + 400 * ((v * 0.4 + hash(i, 102)) % 1);
+        const s = 3 + 5 * Math.abs(Math.sin(u * 5 + i));
+        c.globalAlpha = 0.8 * g; c.beginPath(); c.arc(540 + Math.cos(a) * r, 900 + Math.sin(a) * r, s, 0, TAU); c.fill();
+      }
+      c.globalAlpha = 1;
+      const wf = 1 - smooth(v / 0.5);
+      if (wf > 0) { c.fillStyle = `rgba(255,245,210,${wf})`; c.fillRect(0, 0, W, H); }
+    }
+  }
+
+  // ================================================================ SCENE 8: brothers together, Jai Shri Ram
+  function scene8(c, u, sc) {
+    const cJai = cueStart(sc, 3);
+    skyGrad(c, [[0, '#3a5ac8'], [0.4, '#f08a6a'], [0.65, '#ffc888'], [1, '#ffe8c0']]);
+    godRays(c, 540, 1300, u, 0.15, 14);
+    const sun = c.createRadialGradient(540, 1300, 20, 540, 1300, 500);
+    sun.addColorStop(0, 'rgba(255,252,230,1)'); sun.addColorStop(0.2, 'rgba(255,220,150,0.6)'); sun.addColorStop(1, 'rgba(255,190,120,0)');
+    c.fillStyle = sun; c.fillRect(0, 0, W, H);
+    cloudPuffs(c, [[150 - u * 10, 1500, 160, 111], [900 - u * 7, 1580, 180, 112], [520 - u * 14, 1720, 200, 113]], ['#fff6e8', '#ffd8c0', '#d8a0a8']);
+    // Jatayu's spirit flies with his brother
+    c.save(); c.globalAlpha = 0.5 + 0.1 * Math.sin(u * 2);
+    const spirit = c.createRadialGradient(780, 640, 10, 780, 640, 320);
+    spirit.addColorStop(0, 'rgba(255,255,240,0.7)'); spirit.addColorStop(1, 'rgba(255,255,240,0)');
+    c.fillStyle = spirit; c.fillRect(400, 300, 760, 700);
+    bird(c, 780 + 20 * Math.sin(u * 0.7), 640 + 20 * Math.sin(u * 1.1), 0.75, -0.12, flyPose(u, { freq: 1.3, amp: 0.7, phase: 0.5 }), { pal: { feather: ['#ffffff', '#e8f0ff', '#b8c8f0', '#ffffff'], featherFar: ['#f0f4ff', '#d0dcf8', '#a0b0e0'], covert: ['#ffffff', '#eef4ff', '#c8d6f4', '#ffffff'], body: ['#ffffff', '#e8f0ff', '#b8c8f0'] } });
+    c.restore();
+    bird(c, 380 + 15 * Math.sin(u * 0.8), 900 + 25 * Math.sin(u * 1.2), 1.0, -0.1, flyPose(u, { freq: 1.4, amp: 0.8 }), { pal: BIRD.golden });
+    // title
+    const a = smooth((u - cJai + 0.2) / 0.6);
+    if (a > 0) {
+      c.save(); c.globalAlpha = a; c.textAlign = 'center'; c.textBaseline = 'middle';
+      const s = lerp(1.3, 1, a);
+      c.translate(W / 2, 400); c.scale(s, s);
+      c.font = "140px 'Rozha One'"; c.lineJoin = 'round';
+      c.strokeStyle = '#3a0a0a'; c.lineWidth = 18; c.strokeText('जय श्री राम', 0, 0);
+      const g = c.createLinearGradient(0, -70, 0, 70);
+      g.addColorStop(0, '#fff3b0'); g.addColorStop(0.5, '#ffc83a'); g.addColorStop(1, '#e0700c');
+      c.fillStyle = g; c.fillText('जय श्री राम', 0, 0);
+      c.restore();
+    }
+    const end = smooth((u - sc.length + 1.2) / 1.0);
+    if (end > 0) { c.fillStyle = `rgba(0,0,0,${end})`; c.fillRect(0, 0, W, H); }
+  }
+
+  const SCENES = [null, scene1, scene2, scene3, scene4, scene5, scene6, scene7, scene8];
+
+  // ================================================================ captions + post
+  function captions(c, t) {
+    for (const sc of TL.scenes) {
+      for (const q of sc.cues) {
+        const a0 = sc.start + q.start - 0.08, a1 = sc.start + q.end + 0.12;
+        if (t < a0 || t > a1) continue;
+        const a = smooth((t - a0) / 0.15) * (1 - smooth((t - a1 + 0.15) / 0.15));
+        c.save(); c.globalAlpha = a;
+        c.font = FONT_CAP; c.textAlign = 'center'; c.textBaseline = 'middle';
+        // wrap to 2 lines if too wide
+        let lines = [q.text];
+        if (c.measureText(q.text).width > 900) {
+          const words = q.text.split(' '); let best = 1, bestD = 1e9;
+          for (let i = 1; i < words.length; i++) {
+            const d = Math.abs(c.measureText(words.slice(0, i).join(' ')).width - c.measureText(words.slice(i).join(' ')).width);
+            if (d < bestD) { bestD = d; best = i; }
+          }
+          lines = [words.slice(0, best).join(' '), words.slice(best).join(' ')];
+        }
+        const y0 = 1430 - (lines.length - 1) * 36;
+        lines.forEach((ln, i) => {
+          const y = y0 + i * 72 + 8 * (1 - a);
+          c.lineJoin = 'round'; c.strokeStyle = 'rgba(10,5,20,0.92)'; c.lineWidth = 12; c.strokeText(ln, W / 2, y);
+          c.fillStyle = '#ffffff'; c.fillText(ln, W / 2, y);
+        });
+        c.restore();
+      }
+    }
+  }
+
+  function post(c, f, t) {
+    bctx.filter = 'blur(7px) brightness(0.9) contrast(1.4)';
+    bctx.clearRect(0, 0, bloom.width, bloom.height);
+    bctx.drawImage(canvas, 0, 0, bloom.width, bloom.height);
+    c.save();
+    c.globalCompositeOperation = 'screen'; c.globalAlpha = 0.14; c.drawImage(bloom, 0, 0, W, H);
+    c.globalCompositeOperation = 'source-over'; c.globalAlpha = 1;
+    const v = c.createRadialGradient(W / 2, H * 0.45, H * 0.34, W / 2, H * 0.5, H * 0.8);
+    v.addColorStop(0, 'rgba(5,5,20,0)'); v.addColorStop(1, 'rgba(5,5,20,0.4)');
+    c.fillStyle = v; c.fillRect(0, 0, W, H);
+    const d = grainData.data;
+    for (let i = 0, n = d.length / 4; i < n; i++) { const g = 96 + 64 * hash(f, i, 91); d[4 * i] = d[4 * i + 1] = d[4 * i + 2] = g; d[4 * i + 3] = 255; }
+    gctx.putImageData(grainData, 0, 0);
+    c.globalCompositeOperation = 'overlay'; c.globalAlpha = 0.14; c.drawImage(grain, 0, 0, W, H);
+    c.restore();
+  }
+
+  // ================================================================ frame
+  function drawSceneAt(c, idx, t) {
+    c.save(); c.setTransform(1, 0, 0, 1, 0, 0);
+    c.globalAlpha = 1; c.globalCompositeOperation = 'source-over'; c.filter = 'none';
+    let r;
+    if (idx === 0) scene0(c, t);
+    else { const sc = TL.scenes[idx - 1]; r = SCENES[idx](c, t - sc.start, sc); }
+    c.restore();
+    return r;
+  }
+
+  function sceneIndex(t) {
+    if (t < TL.title) return 0;
+    for (let i = TL.scenes.length - 1; i >= 0; i--) if (t >= TL.scenes[i].start) return i + 1;
+    return 1;
+  }
+  const sceneStart = (i) => (i === 0 ? 0 : TL.scenes[i - 1].start);
+
+  function renderFrame(t) {
+    const f = Math.round(t * FPS);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.filter = 'none';
+    const i = sceneIndex(t);
+    const r = drawSceneAt(ctx, i, t);
+    // cross-dissolve into the next scene
+    const next = i + 1;
+    if (next <= TL.scenes.length) {
+      const b = sceneStart(next);
+      const k = (t - (b - XFADE)) / XFADE;
+      if (k > 0 && k < 1) {
+        const bctx2 = bufB.getContext('2d');
+        drawSceneAt(bctx2, next, t);
+        ctx.globalAlpha = smooth(k); ctx.drawImage(bufB, 0, 0); ctx.globalAlpha = 1;
+      }
+    }
+    if (r && r.impact !== undefined) {                       // sword-cut impact frames
+      const a = bufA.getContext('2d');
+      a.setTransform(1, 0, 0, 1, 0, 0); a.drawImage(canvas, 0, 0);
+      if (r.impact < 3) {
+        ctx.filter = `grayscale(1) contrast(40)${r.impact !== 1 ? ' invert(1)' : ''}`;
+        ctx.drawImage(bufA, 0, 0); ctx.filter = 'none';
+      } else {
+        ctx.filter = 'grayscale(1) contrast(40)'; ctx.drawImage(bufA, 0, 0); ctx.filter = 'none';
+        ctx.globalCompositeOperation = 'multiply'; ctx.fillStyle = '#ff1e2d'; ctx.fillRect(0, 0, W, H);
+        ctx.globalCompositeOperation = 'source-over';
+      }
+    }
+    post(ctx, f, t);
+    captions(ctx, t);
+  }
+
+  window.renderFrame = renderFrame;
+  window.TOTAL = TL.total;
+  Promise.all([
+    document.fonts.load(FONT_CAP, 'जटायु'), document.fonts.load("400 64px 'Noto Sans Devanagari'", 'जटायु'),
+    document.fonts.load("64px 'Rozha One'", 'जटायु'),
+  ]).then(() => {
+    window.__ready = true;
+    const params = new URLSearchParams(location.search);
+    if (params.has('render')) { document.body.classList.add('render'); return; }
+    const hud = document.getElementById('hud');
+    if (params.has('t')) { const t = +params.get('t'); renderFrame(t); hud.textContent = `t=${t.toFixed(2)}s`; return; }
+    const t0 = performance.now();
+    (function loop(now) {
+      const t = (((now - t0) / 1000) % TL.total);
+      renderFrame(Math.floor(t * FPS) / FPS);
+      hud.textContent = `t=${t.toFixed(2)}s`;
+      requestAnimationFrame(loop);
+    })(t0);
+  });
+})();
+</script>
+</body>
+</html>

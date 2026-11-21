@@ -288,10 +288,19 @@
 
   /** Full skeleton + feather layout for drawing (body-local coords). */
   function jatayuRig(t) {
-    const p = jatayuPose(t);
-    const lag = jatayuPose(t - 0.07);                    // hand trails the arm: follow-through
+    return rigFromPose(jatayuPose(t), jatayuPose(t - 0.07).theta);
+  }
+
+  /**
+   * Skeleton + feather layout for any pose
+   * {spread, theta, talons, pitch, tailSpread, jaw, grip, wingScale?}.
+   * lagTheta = theta a moment earlier (hand follow-through).
+   */
+  function rigFromPose(p, lagTheta) {
+    const lag = { theta: lagTheta };
+    const ws = p.wingScale ?? 1;
     const sp = p.spread;
-    const La = lerp(72, 150, sp), Lh = lerp(84, 190, sp), chord = lerp(58, 96, sp);
+    const La = lerp(72, 150, sp) * ws, Lh = lerp(84, 190, sp) * ws, chord = lerp(58, 96, sp) * Math.sqrt(ws);
 
     const wing = (shoulder, dTheta) => {
       const a1 = p.theta + dTheta;
@@ -334,8 +343,8 @@
 
     const leg = legJoints(p.talons);
     const neckBase = { x: 62, y: -14 };
-    const nu = -0.5 - 0.5 * p.pitch;                     // neck lifts the head when diving
-    const head = { x: neckBase.x + Math.cos(nu) * 60, y: neckBase.y + Math.sin(nu) * 60, rot: -0.62 * p.pitch };
+    const nu = -0.5 - 0.5 * p.pitch + (p.neck ?? 0);     // neck lifts the head when diving
+    const head = { x: neckBase.x + Math.cos(nu) * 60, y: neckBase.y + Math.sin(nu) * 60, rot: -0.62 * p.pitch + (p.headRot ?? 0) };
 
     return {
       pose: p,
@@ -596,7 +605,7 @@
     W, H, FPS, DUR, FRAMES, FLARE_T, STRIKE_T, STRIKE_FRAME, TAU,
     clamp, lerp, smooth, hash, quad, cubic, ribbon, poly, ellipse, puffs,
     vimanState, vimanParts, localToWorld, kalashWorld, KALASH_LOCAL,
-    jatayuState, jatayuPose, jatayuRig, jatayuToWorld, contactLocal, featherShape, headParts, ruffPath,
+    jatayuState, jatayuPose, jatayuRig, rigFromPose, jatayuToWorld, contactLocal, featherShape, headParts, ruffPath,
     bellSwing, sceneTime, camera, applyCamera,
     birdsState, birdPath, feathersState, featherPath, cloudBand, cumulus,
   };
