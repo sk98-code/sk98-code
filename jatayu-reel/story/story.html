@@ -252,6 +252,168 @@
     }
   }
 
+  // ================================================================ cinematic background kit
+  // Dark, rich layers lit by a strong light source: atmospheric depth, rim light, fog, glow.
+  function ridgePath(baseY, amp, seed, off = 0, jag = 1, step = 50) {
+    const pts = [];
+    for (let x = -260; x <= W + 260; x += step) {
+      const n = noise1(x + off, seed);
+      const peak = Math.pow(Math.abs(Math.sin((x + off) * 0.0036 + seed)), 1.4 * jag);
+      pts.push([x, baseY - amp * (0.4 + 0.3 * n + 0.6 * peak)]);
+    }
+    const p = new Path2D();
+    p.moveTo(-260, H + 400); p.lineTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length - 1; i++) p.quadraticCurveTo(pts[i][0], pts[i][1], (pts[i][0] + pts[i + 1][0]) / 2, (pts[i][1] + pts[i + 1][1]) / 2);
+    p.lineTo(W + 260, pts[pts.length - 1][1]); p.lineTo(W + 260, H + 400); p.closePath();
+    return { p, pts };
+  }
+
+  function stars(c, n, alpha, t, seed = 1, maxY = H * 0.55) {
+    for (let i = 0; i < n; i++) {
+      const tw = 0.55 + 0.45 * Math.sin(t * 2.5 + i * 1.7);
+      const r = 0.8 + 2.2 * hash(i, seed, 5) * tw;
+      c.fillStyle = `rgba(255,250,235,${alpha * (0.4 + 0.6 * hash(i, seed, 2))})`;
+      c.beginPath(); c.arc(hash(i, seed, 3) * W, hash(i, seed, 4) * maxY, r, 0, TAU); c.fill();
+      if (r > 2.4) { c.fillRect(hash(i, seed, 3) * W - r * 3, hash(i, seed, 4) * maxY - 0.5, r * 6, 1); }
+    }
+  }
+
+  function glow(c, x, y, r, inner, outer = 'rgba(0,0,0,0)', mid) {
+    const g = c.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, inner); if (mid) g.addColorStop(0.25, mid); g.addColorStop(1, outer);
+    c.save(); c.globalCompositeOperation = 'screen'; c.fillStyle = g; c.fillRect(x - r, y - r, 2 * r, 2 * r); c.restore();
+  }
+
+  /** Mountain / hill layers far → near. Each: {y, amp, seed, col, rim, jag, snow, off}. light = {x, y} of the light source. */
+  function layers(c, list, light, fogCol) {
+    list.forEach((Ly, i) => {
+      const { p, pts } = ridgePath(Ly.y, Ly.amp, Ly.seed, Ly.off || 0, Ly.jag ?? 1);
+      c.fillStyle = Ly.col; c.fill(p);
+      if (Ly.snow) {
+        c.save(); c.clip(p);
+        const cap = new Path2D(); cap.moveTo(-260, -400);
+        for (const [x, y] of pts) cap.lineTo(x, y + 46 + 22 * Math.sin(x * 0.05));
+        cap.lineTo(W + 260, -400); cap.closePath();
+        c.fillStyle = Ly.snow; c.fill(cap);
+        c.restore();
+      }
+      if (Ly.rim) {                                           // rim light along the crest, strongest near the light
+        c.save(); c.clip(p);
+        const g = c.createRadialGradient(light.x, light.y, 50, light.x, light.y, 1300);
+        g.addColorStop(0, Ly.rim); g.addColorStop(1, 'rgba(0,0,0,0)');
+        c.strokeStyle = g; c.lineWidth = 12; c.stroke(p);
+        c.restore();
+      }
+      if (fogCol && i < list.length - 1) {                    // haze at the foot of every layer
+        const top = Math.min(...pts.map((q) => q[1]));
+        const fg = c.createLinearGradient(0, top, 0, Ly.y + 60);
+        fg.addColorStop(0, 'rgba(0,0,0,0)'); fg.addColorStop(1, fogCol);
+        c.fillStyle = fg; c.fillRect(-200, top, W + 400, Ly.y + 60 - top);
+        c.fillStyle = fogCol; c.fillRect(-200, Ly.y + 60, W + 400, 40);
+      }
+    });
+  }
+
+  /** Big painterly cloud lit from the light direction (rim + body + dark underside, soft edge). */
+  function litCloud(c, x, y, size, seed, rim, body, shade, light) {
+    const p = S.cumulus(x, y, size, seed);
+    let dx = light.x - x, dy = light.y - y; const l = Math.hypot(dx, dy) || 1; dx /= l; dy /= l;
+    c.save(); c.filter = 'blur(1.6px)';
+    cel3(c, p, [rim, body, shade], { x: dx, y: dy }, size * 0.22, size * 0.05, 0);
+    c.restore();
+  }
+
+  function forestBand(c, y, h, col, rim, seed, scale, light) {
+    const blobs = [];
+    for (let x = -100; x < W + 100; x += 70 * scale) blobs.push({ x: x + hash(seed, x | 0, 1) * 40, y: y - h * (0.4 + 0.6 * hash(seed, x | 0, 2)), r: (60 + 40 * hash(seed, x | 0, 3)) * scale });
+    const p = S.puffs(blobs); p.rect(-200, y, W + 400, H - y + 400);
+    c.fillStyle = col; c.fill(p);
+    if (rim) {                                     // lit crest: rim everywhere, then body shifted away from the light
+      c.save(); c.clip(p);
+      const g = c.createRadialGradient(light.x, light.y, 50, light.x, light.y, 1200);
+      g.addColorStop(0, rim); g.addColorStop(1, 'rgba(0,0,0,0)');
+      c.fillStyle = g; c.fillRect(-200, 0, W + 400, H);
+      c.translate(0, 9); c.fillStyle = col; c.fill(p);
+      c.restore();
+    }
+  }
+
+  /** Painterly tree: dark canopy with a lit edge toward the light. */
+  function darkTree(c, x, y, s, seed, col, rim, light, trunk = '#2a1a14') {
+    c.save(); c.translate(x, y); c.scale(s, s);
+    c.fillStyle = trunk; c.beginPath(); c.moveTo(-16, 0); c.quadraticCurveTo(-10, -100, -8, -170); c.lineTo(8, -170); c.quadraticCurveTo(10, -100, 16, 0); c.closePath(); c.fill();
+    const blobs = [];
+    for (let i = 0; i < 9; i++) blobs.push({ x: (hash(seed, i, 1) - 0.5) * 190, y: -200 - hash(seed, i, 2) * 150, r: 55 + 30 * hash(seed, i, 3) });
+    const p = S.puffs(blobs);
+    c.save(); c.clip(p);
+    c.fillStyle = rim; c.fillRect(-400, -600, 800, 700);
+    const lx = (light.x - x) / s, ly = (light.y - y) / s, l = Math.hypot(lx, ly) || 1;
+    c.translate(-lx / l * 14, -ly / l * 14); c.fillStyle = col; c.fill(p);
+    c.restore();
+    c.restore();
+  }
+
+  function fgGrass(c, t, y, col = '#070a08', seed = 3) {
+    c.fillStyle = col;
+    c.beginPath(); c.moveTo(-50, H + 10); c.lineTo(-50, y + 40);
+    for (let i = 0; i <= 70; i++) {
+      const x = -50 + i * 17, h = 50 + 110 * hash(i, seed, 1), sw = Math.sin(t * 1.6 + i * 0.7) * 10;
+      c.lineTo(x + 4, y + 40); c.quadraticCurveTo(x + 6 + sw * 0.5, y + 40 - h * 0.5, x + 9 + sw, y + 40 - h); c.quadraticCurveTo(x + 10, y + 40 - h * 0.4, x + 14, y + 40);
+    }
+    c.lineTo(W + 50, y + 40); c.lineTo(W + 50, H + 10); c.closePath(); c.fill();
+  }
+
+  function fgLeaves(c, t, side, y, s = 1, col = '#081008') {
+    c.save(); c.translate(side < 0 ? -20 : W + 20, y); c.scale(side * -s, s); c.rotate(0.04 * Math.sin(t * 1.1));
+    c.fillStyle = col; c.strokeStyle = col; c.lineWidth = 10; c.lineCap = 'round';
+    c.beginPath(); c.moveTo(0, 0); c.quadraticCurveTo(160, 40, 330, 140); c.stroke();
+    for (let i = 0; i < 9; i++) {
+      const u = i / 8, bx = lerp(20, 320, u), by = lerp(4, 136, u * u);
+      for (const sd of [-1, 1]) {
+        const a = 0.9 * sd + 0.4 + 0.1 * Math.sin(t * 2 + i), L = 70 - i * 3;
+        c.save(); c.translate(bx, by); c.rotate(a);
+        c.beginPath(); c.moveTo(0, 0); c.quadraticCurveTo(L * 0.5, -16, L, 0); c.quadraticCurveTo(L * 0.5, 16, 0, 0); c.fill();
+        c.restore();
+      }
+    }
+    c.restore();
+  }
+
+  function motes(c, t, n, col, seed, x0 = 0, y0 = 0, w = W, h = H) {
+    c.save(); c.globalCompositeOperation = 'screen';
+    for (let i = 0; i < n; i++) {
+      const x = x0 + ((hash(i, seed, 1) * w + Math.sin(t * 0.6 + i) * 30 + t * 12) % w);
+      const y = y0 + ((hash(i, seed, 2) * h - t * (8 + 14 * hash(i, seed, 3))) % h + h) % h;
+      const a = 0.35 + 0.45 * Math.sin(t * 2 + i * 1.3) ** 2, r = 2 + 4 * hash(i, seed, 4);
+      const g = c.createRadialGradient(x, y, 0, x, y, r * 4);
+      g.addColorStop(0, col.replace('A', a.toFixed(2))); g.addColorStop(1, col.replace('A', '0'));
+      c.fillStyle = g; c.fillRect(x - r * 4, y - r * 4, r * 8, r * 8);
+    }
+    c.restore();
+  }
+
+  function glitter(c, x, y0, y1, t) {                         // sun path on water
+    c.save(); c.globalCompositeOperation = 'screen';
+    for (let i = 0; i < 60; i++) {
+      const k = i / 60, y = lerp(y0, y1, k * k);
+      const w = 20 + 260 * k, xx = x + (hash(i, 9) - 0.5) * w + Math.sin(t * 2 + i) * 6;
+      c.fillStyle = `rgba(255,220,150,${0.6 * (1 - k * 0.6)})`;
+      c.fillRect(xx - (6 + 30 * k) / 2, y, 6 + 30 * k, 2 + 3 * k);
+    }
+    c.restore();
+  }
+
+  function darkSea(c, y0, t, top, bottom, sunX) {
+    const g = c.createLinearGradient(0, y0, 0, H); g.addColorStop(0, top); g.addColorStop(1, bottom);
+    c.fillStyle = g; c.fillRect(-200, y0, W + 400, H - y0 + 400);
+    c.strokeStyle = 'rgba(160,200,255,0.18)'; c.lineWidth = 2;
+    for (let i = 0; i < 30; i++) {
+      const yy = y0 + 8 + i * i * 1.9, xx = ((hash(i, 5) * W + t * (14 + i * 2)) % (W + 200)) - 100, l = 20 + i * 4;
+      c.beginPath(); c.moveTo(xx - l, yy); c.quadraticCurveTo(xx, yy - 4, xx + l, yy); c.stroke();
+    }
+    if (sunX !== undefined) glitter(c, sunX, y0, H, t);
+  }
+
   // ---------------------------------------------------------------- anime close-up inserts
   /** Full-screen bust shot with an anime mood background. k = 0..1 progress through the insert. */
   function moodBg(c, kind, k, t, cx = 540, cy = 760) {
@@ -319,14 +481,14 @@
 
   // ================================================================ SCENE 0: title
   function scene0(c, u) {
-    skyGrad(c, [[0, '#07051a'], [0.45, '#2a1450'], [0.75, '#a2385a'], [1, '#f39a4a']]);
-    for (let i = 0; i < 90; i++) {
-      c.fillStyle = `rgba(255,255,240,${0.4 + 0.5 * hash(i, 2)})`;
-      const tw = 0.6 + 0.4 * Math.sin(u * 3 + i);
-      c.beginPath(); c.arc(hash(i, 3) * W, hash(i, 4) * H * 0.6, 1 + 2 * hash(i, 5) * tw, 0, TAU); c.fill();
-    }
-    ridge(c, 1640, 220, 1.3, ['#5a2c5a', '#2c1236', '#14081c'], u * 10, false);
-    ridge(c, 1800, 160, 4.1, ['#3a1a3a', '#1a0a22', '#0a0410'], u * 22, false);
+    skyGrad(c, [[0, '#03020c'], [0.4, '#140c34'], [0.68, '#4a1a4e'], [0.84, '#b8466a'], [1, '#ffa064']]);
+    stars(c, 160, 1, u, 1, H * 0.7);
+    glow(c, 540, 1900, 1100, 'rgba(255,150,90,0.55)', 'rgba(0,0,0,0)', 'rgba(255,110,90,0.25)');
+    layers(c, [
+      { y: 1560, amp: 300, seed: 1.3, col: '#2c1a44', rim: 'rgba(255,150,150,0.9)', off: u * 8 },
+      { y: 1700, amp: 220, seed: 4.1, col: '#170c28', rim: 'rgba(255,120,110,0.8)', off: u * 18 },
+      { y: 1840, amp: 160, seed: 6.6, col: '#08040e', off: u * 30 },
+    ], { x: 540, y: 1900 }, 'rgba(160,70,110,0.35)');
     // two silhouettes crossing the dawn
     for (const [k, dy, s] of [[0, 0, 0.55], [1, 120, 0.45]]) {
       const fp = flyPose(u + k * 0.3, { freq: 1.6, amp: 0.8 });
@@ -355,19 +517,22 @@
   // ================================================================ SCENE 1: the brothers at dawn
   function scene1(c, u, sc) {
     const cam = 1 + u * 0.012;
-    skyGrad(c, [[0, '#2c4aa8'], [0.35, '#e9718a'], [0.6, '#ffb36a'], [0.78, '#ffe2a6'], [1, '#ffd9a0']]);
-    // rising sun (Arun's dawn)
-    const sy = 1180 - u * 25;
-    const g = c.createRadialGradient(540, sy, 20, 540, sy, 700);
-    g.addColorStop(0, 'rgba(255,250,220,1)'); g.addColorStop(0.15, 'rgba(255,220,140,0.7)'); g.addColorStop(1, 'rgba(255,170,90,0)');
-    c.fillStyle = g; c.fillRect(0, 0, W, H);
-    c.fillStyle = '#fff8dc'; c.beginPath(); c.arc(540, sy, 110, 0, TAU); c.fill();
-    godRays(c, 540, sy, u, 0.1);
+    skyGrad(c, [[0, '#060a26'], [0.28, '#22205a'], [0.5, '#7a2f6e'], [0.64, '#e0607a'], [0.74, '#ffa66a'], [0.82, '#ffd9a0'], [1, '#ffd9a0']]);
+    stars(c, 80, 1 - smooth(u / 6), u, 2, H * 0.3);
+    const sy = 1240 - u * 22;                                          // rising sun (Arun's dawn)
+    glow(c, 540, sy, 1100, 'rgba(255,230,180,0.95)', 'rgba(0,0,0,0)', 'rgba(255,150,110,0.45)');
+    c.fillStyle = '#fffbe8'; c.beginPath(); c.arc(540, sy, 90, 0, TAU); c.fill();
+    godRays(c, 540, sy, u, 0.16, 16);
     c.save(); c.translate(540, 960); c.scale(cam, cam); c.translate(-540, -960);
-    cloudPuffs(c, [[120 - u * 12, 760, 120, 3], [960 - u * 8, 640, 140, 5]], ['#fff2e0', '#ffd6c0', '#e0a0a8']);
-    ridge(c, 1330, 360, 2.2, ['#d8c8f0', '#8a7ab8', '#4e4280'], u * 6, true, 1.4);
-    ridge(c, 1520, 300, 5.3, ['#b4a0d8', '#62528f', '#2e2456'], u * 14, true, 1.2);
-    ridge(c, 1760, 220, 8.8, ['#7a6aa8', '#3a2c62', '#1a1236'], u * 28, false);
+    const sun1 = { x: 540, y: sy };
+    litCloud(c, 140 - u * 12, 720, 170, 3, '#ffe2b8', '#a2507a', '#3a2052', sun1);
+    litCloud(c, 960 - u * 8, 560, 190, 5, '#ffe2b8', '#8e4878', '#2e1a4a', sun1);
+    layers(c, [
+      { y: 1300, amp: 380, seed: 2.2, col: '#5a3a7a', rim: 'rgba(255,190,150,1)', snow: 'rgba(255,214,224,0.95)', jag: 1.4, off: u * 6 },
+      { y: 1500, amp: 300, seed: 5.3, col: '#36245a', rim: 'rgba(255,160,130,0.9)', snow: 'rgba(220,180,220,0.9)', jag: 1.2, off: u * 14 },
+      { y: 1720, amp: 220, seed: 8.8, col: '#140c2a', rim: 'rgba(255,140,120,0.7)', off: u * 28 },
+    ], sun1, 'rgba(220,120,150,0.35)');
+    motes(c, u, 24, 'rgba(255,220,170,A)', 11);
     // brothers flying right, side by side
     const sp = { x: 360 + u * 26, y: 780 + 22 * Math.sin(u * 1.3) };
     const ja = { x: 640 + u * 24, y: 1010 + 18 * Math.sin(u * 1.5 + 1) };
@@ -380,15 +545,17 @@
 
   // ================================================================ SCENE 2: race to the sun
   function scene2(c, u, sc) {
-    skyGrad(c, [[0, '#ff8c2a'], [0.25, '#ffb84a'], [0.55, '#4a8ae0'], [1, '#2252b0']]);
+    skyGrad(c, [[0, '#ff9a3a'], [0.18, '#e0603a'], [0.4, '#4a3a8a'], [0.7, '#16205a'], [1, '#070c26']]);
     const sr = 190 + u * 9;
-    godRays(c, 540, 300, u, 0.16, 16);
+    glow(c, 540, 300, 1300, 'rgba(255,230,160,0.9)', 'rgba(0,0,0,0)', 'rgba(255,140,60,0.4)');
+    godRays(c, 540, 300, u, 0.22, 18);
     // clouds rush downward: they are climbing
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < 8; i++) {
       const y = ((hash(i, 9) * 2400 + u * (500 + 300 * hash(i, 8))) % 2600) - 400;
       if (y < 560) continue;
-      cloudPuffs(c, [[hash(i, 7) * W, y, 90 + 80 * hash(i, 6), i + 20]], ['#ffffff', '#f3f6ff', '#b8c8ea']);
+      litCloud(c, hash(i, 7) * W, y, 100 + 90 * hash(i, 6), i + 20, '#ffd9a0', '#5a5aa0', '#1c1c4a', { x: 540, y: 300 });
     }
+    motes(c, u, 20, 'rgba(255,210,150,A)', 12);
     C.surya(c, 540, 300, sr, u, 'calm', LW);
     // vertical speed lines
     c.save(); c.strokeStyle = 'rgba(255,255,255,0.55)'; c.lineCap = 'round';
@@ -412,7 +579,9 @@
     if (u < cFall - 0.2) {
       // ---- near the sun ----
       const heat = smooth(u / 2);
-      skyGrad(c, [[0, mixHex('#ff8c2a', '#ff3a10', heat)], [0.4, mixHex('#ffb84a', '#ff7a20', heat)], [1, mixHex('#4a8ae0', '#a04040', heat)]]);
+      skyGrad(c, [[0, mixHex('#ff9a3a', '#ff5a10', heat)], [0.3, mixHex('#e0603a', '#c02a10', heat)], [0.65, mixHex('#4a2a6a', '#5a0a1a', heat)], [1, mixHex('#120c30', '#1a0408', heat)]]);
+      glow(c, 540, 180, 1400, 'rgba(255,220,140,0.9)', 'rgba(0,0,0,0)', 'rgba(255,90,30,0.5)');
+      embers(c, 540, 1900, 1100, 1700, u, 50, 21, '#ffb347');
       const shake = 6 * heat;
       const fr = Math.round(u * FPS);
       c.save(); c.translate((hash(fr, 1) - 0.5) * shake, (hash(fr, 2) - 0.5) * shake);
@@ -459,9 +628,14 @@
     } else {
       // ---- the fall to Vindhya ----
       const v = clamp((u - cFall + 0.2) / (sc.length - cFall));
-      skyGrad(c, [[0, '#f08a3a'], [0.45, '#f6c07a'], [1, '#9ab8d8']]);
-      ridge(c, 1450, 260, 3.3, ['#b4a08c', '#6e5a48', '#3a2c20'], 0, false, 1.0);
-      ridge(c, 1700, 420, 7.7, ['#9a7c5c', '#5c4026', '#2c1c0e'], 120, false, 0.7);   // Vindhya
+      skyGrad(c, [[0, '#0c0a2a'], [0.38, '#3a1a4e'], [0.6, '#a03a4a'], [0.72, '#f07a3a'], [0.8, '#ffc070'], [1, '#ffc070']]);
+      stars(c, 50, 0.6, u, 3, H * 0.3);
+      glow(c, 820, 1300, 1000, 'rgba(255,200,120,0.9)', 'rgba(0,0,0,0)', 'rgba(255,100,60,0.4)');
+      layers(c, [
+        { y: 1380, amp: 260, seed: 3.3, col: '#5a2a4a', rim: 'rgba(255,170,110,1)' },
+        { y: 1560, amp: 380, seed: 7.7, col: '#2e1428', rim: 'rgba(255,140,90,0.9)', jag: 0.7, off: 120 },   // Vindhya
+        { y: 1800, amp: 200, seed: 9.9, col: '#0e060c' },
+      ], { x: 820, y: 1300 }, 'rgba(200,90,90,0.35)');
       const fall = Math.min(1, v * 1.25);
       const px = lerp(780, 520, fall) + 80 * Math.sin(fall * 8), py = lerp(-120, 1360, fall * fall);
       // smoke trail from earlier positions
@@ -526,17 +700,24 @@
       c.restore();
       insertFrame(c); return;
     }
-    skyGrad(c, [[0, '#3a7ad8'], [0.5, '#8cc8f0'], [0.75, '#cfeaf0'], [1, '#6a9a5a']]);
-    cloudPuffs(c, [[200 - u * 6, 520, 130, 31], [900 - u * 4, 430, 110, 33]], ['#ffffff', '#f2f6ff', '#b3c8ec']);
+    skyGrad(c, [[0, '#0c1a3e'], [0.35, '#24467e'], [0.58, '#5a7aa8'], [0.7, '#e8a070'], [0.78, '#ffd8a0'], [1, '#ffd8a0']]);
+    const sun4 = { x: 900, y: 1240 };
+    glow(c, sun4.x, sun4.y, 1100, 'rgba(255,230,170,0.95)', 'rgba(0,0,0,0)', 'rgba(255,170,90,0.45)');
+    litCloud(c, 200 - u * 6, 520, 170, 31, '#ffe0b0', '#5a6a9a', '#1e2650', sun4);
+    litCloud(c, 900 - u * 4, 400, 140, 33, '#ffe8c0', '#6a78a8', '#222a58', sun4);
+    godRays(c, sun4.x, sun4.y, u, 0.14, 14);
     // years pass: overlay text
     const yrs = smooth(u / 0.5) * (1 - smooth((u - cSee + 0.2) / 0.5));
     // forest (Panchavati)
-    ridge(c, 1380, 220, 2.6, ['#b8d8ff', '#8ab0e0', '#6a90c8'], 0, false, 0.8);
-    ridge(c, 1500, 160, 9.1, ['#a8e080', '#6cbc56', '#3e8a3a'], 0, false, 0.6);
-    meadow(c, 1560, u, '#a6e070', '#4e9e3c', 4);
-    for (let i = 0; i < 6; i++) tree(c, 120 + i * 190, 1620 + (i % 2) * 50, 0.8 + 0.2 * hash(i, 41), i + 40, i % 2 ? ['#b4ea86', '#6cc456', '#46a040'] : undefined);
+    layers(c, [{ y: 1360, amp: 240, seed: 2.6, col: '#4a5a86', rim: 'rgba(255,210,150,0.9)', jag: 0.8 }], sun4, 'rgba(240,180,140,0.4)');
+    forestBand(c, 1470, 170, '#22423e', 'rgba(255,220,140,0.9)', 5, 1.0, sun4);
+    forestBand(c, 1580, 150, '#12261e', 'rgba(255,200,120,0.8)', 8, 1.2, sun4);
+    const gg = c.createLinearGradient(0, 1600, 0, H); gg.addColorStop(0, '#1e3a1e'); gg.addColorStop(1, '#0a160c');
+    c.fillStyle = gg; c.fillRect(-100, 1600, W + 200, H);
     // the big tree Jatayu perches on
-    tree(c, 230, 1700, 1.75, 99);
+    darkTree(c, 230, 1760, 1.9, 99, '#173a26', 'rgba(220,230,130,0.85)', sun4);
+    motes(c, u, 30, 'rgba(255,230,160,A)', 14, 0, 900, W, 900);
+    fgGrass(c, u, 1800, '#050a06', 4);
     const vT = clamp((u - cSee + 0.3) / (sc.length - cSee));
     let vs = { x: lerp(1450, 560, smooth(vT * 1.6)), y: 930 + 10 * Math.sin(u * 1.5), rot: 0.02 * Math.sin(u), scale: 1 };
     if (u > cCut) vs.x = lerp(560, -500, smooth((u - cCut) / 2.8));
@@ -608,13 +789,17 @@
       insertFrame(c); return;
     }
     if (u < cRites - 0.3) {
-      skyGrad(c, [[0, '#4a2a6a'], [0.4, '#d8664a'], [0.7, '#f6b06a'], [1, '#3a5a2a']]);
+      skyGrad(c, [[0, '#080622'], [0.32, '#2a1648'], [0.52, '#8a2e4e'], [0.62, '#e06a46'], [0.7, '#ffb060'], [1, '#ffb060']]);
+      stars(c, 50, 0.7, u, 5, H * 0.3);
       const g = c.createRadialGradient(540, 1000, 40, 540, 1000, 600);
       g.addColorStop(0, 'rgba(255,220,150,0.8)'); g.addColorStop(1, 'rgba(255,200,120,0)');
       c.fillStyle = g; c.fillRect(0, 0, W, H);
-      ridge(c, 1100, 160, 3.7, ['#d88a8a', '#a86a7a', '#7a4a6a'], 0, false, 0.7);
-      for (let i = 0; i < 6; i++) tree(c, i * 210 - 40, 1200 + (i % 2) * 30, 1.0, 60 + i, ['#a0c070', '#6a9a46', '#46703a'], ['#a87850', '#7a5032', '#52321a']);
-      meadow(c, 1170, u, '#8ab45a', '#3e6a2a', 7);
+      const sun5 = { x: 540, y: 1080 };
+      layers(c, [{ y: 1080, amp: 160, seed: 3.7, col: '#4a2440', rim: 'rgba(255,170,110,1)', jag: 0.7 }], sun5, 'rgba(230,120,90,0.4)');
+      forestBand(c, 1180, 220, '#1e1428', 'rgba(255,150,90,0.9)', 11, 1.1, sun5);
+      const gg = c.createLinearGradient(0, 1180, 0, H); gg.addColorStop(0, '#2a2a20'); gg.addColorStop(1, '#0a0a08');
+      c.fillStyle = gg; c.fillRect(-100, 1180, W + 200, H);
+      motes(c, u, 26, 'rgba(200,255,140,A)', 15, 0, 800, W, 900);      // fireflies
       const zoom = 1 + u * 0.015;
       c.save(); c.translate(540, 1200); c.scale(zoom, zoom); c.translate(-540, -1200);
       // Lakshmana standing behind, sad
@@ -644,11 +829,14 @@
     } else {
       // funeral pyre at dusk
       const v = u - cRites + 0.3;
-      skyGrad(c, [[0, '#120a2a'], [0.45, '#5a1e3a'], [0.7, '#c85a2a'], [1, '#1a1208']]);
-      const glow = c.createRadialGradient(540, 1150, 30, 540, 1150, 800);
-      glow.addColorStop(0, 'rgba(255,160,60,0.85)'); glow.addColorStop(1, 'rgba(255,90,30,0)');
-      c.fillStyle = glow; c.fillRect(0, 0, W, H);
-      c.fillStyle = '#1a120a'; c.fillRect(0, 1260, W, H);
+      skyGrad(c, [[0, '#02020a'], [0.45, '#0c0820'], [0.7, '#2a1020'], [1, '#0a0606']]);
+      stars(c, 140, 0.9, u, 6, H * 0.5);
+      c.fillStyle = '#fff6dc'; c.beginPath(); c.arc(860, 300, 50, 0, TAU); c.fill();                       // moon
+      glow(c, 860, 300, 260, 'rgba(220,230,255,0.5)');
+      forestBand(c, 1180, 260, '#0a0810', 'rgba(255,120,50,0.8)', 13, 1.2, { x: 540, y: 1150 });
+      const fl = 0.85 + 0.15 * Math.sin(u * 9) * Math.sin(u * 5.3);
+      glow(c, 540, 1150, 900 * fl, 'rgba(255,170,70,0.9)', 'rgba(0,0,0,0)', 'rgba(255,90,30,0.45)');
+      c.fillStyle = '#120c08'; c.fillRect(0, 1260, W, H);
       // logs
       for (let i = 0; i < 5; i++) {
         c.save(); c.translate(540, 1240 - i * 22); c.rotate(i % 2 ? 0.08 : -0.08);
@@ -684,24 +872,32 @@
       insertFrame(c); return;
     }
     const pan = smooth((u - cName + 1.2) / 1.6);           // camera tilts up to Sampati
-    skyGrad(c, [[0, '#4a90e0'], [0.5, '#9ad0f0'], [1, '#e0f0f0']]);
+    skyGrad(c, [[0, '#060c26'], [0.3, '#1c2a5c'], [0.5, '#6a3a6e'], [0.62, '#e0706a'], [0.7, '#ffb470'], [1, '#ffb470']]);
     c.save(); c.translate(0, lerp(-380, 260, pan));
-    cloudPuffs(c, [[200, 300, 110, 61], [880, 240, 90, 62]], ['#ffffff', '#f2f6ff', '#b3c8ec']);
-    sea(c, 1500, u);
+    stars(c, 60, 0.7, u, 7, 600);
+    glow(c, 260, 1490, 1000, 'rgba(255,220,150,0.95)', 'rgba(0,0,0,0)', 'rgba(255,120,80,0.45)');
+    c.fillStyle = '#fff2cc'; c.beginPath(); c.arc(260, 1490, 70, Math.PI, 0); c.fill();
+    litCloud(c, 200, 330, 150, 61, '#ffd8a8', '#5a4a80', '#1c1a44', { x: 260, y: 1490 });
+    litCloud(c, 880, 250, 120, 62, '#ffd8a8', '#4a4078', '#18163e', { x: 260, y: 1490 });
+    darkSea(c, 1500, u, '#2a3a6a', '#060c1e', 260);
     // Vindhya cliffs
     const cliff = new Path2D();
     cliff.moveTo(-100, 2400); cliff.lineTo(-100, 900); cliff.quadraticCurveTo(60, 780, 200, 760); cliff.quadraticCurveTo(300, 560, 400, 520);
     cliff.quadraticCurveTo(480, 450, 600, 470); cliff.quadraticCurveTo(740, 500, 800, 580); cliff.quadraticCurveTo(900, 660, 920, 800);
     cliff.quadraticCurveTo(960, 1100, 1060, 1220); cliff.quadraticCurveTo(1140, 1320, 1180, 1400); cliff.lineTo(1180, 2400); cliff.closePath();
-    const cg = c.createLinearGradient(0, 450, 0, 1600); cg.addColorStop(0, '#e8c8a0'); cg.addColorStop(0.5, '#c09a74'); cg.addColorStop(1, '#8a6a4c');
-    c.fillStyle = cg; c.fill(cliff); c.strokeStyle = 'rgba(60,40,30,0.8)'; c.lineWidth = 6; c.stroke(cliff);
+    const cg = c.createLinearGradient(0, 450, 0, 1600); cg.addColorStop(0, '#5a3e4e'); cg.addColorStop(0.5, '#3a2838'); cg.addColorStop(1, '#1a1220');
+    c.fillStyle = cg; c.fill(cliff);
     c.save(); c.clip(cliff);
-    c.fillStyle = 'rgba(120,80,50,0.25)';                                  // soft rock layers
+    c.fillStyle = 'rgba(10,5,20,0.3)';                                     // soft rock layers
     for (let i = 0; i < 6; i++) { c.beginPath(); c.ellipse(200 + i * 160, 820 + i * 130, 260, 40, -0.15, 0, TAU); c.fill(); }
+    const rg = c.createRadialGradient(260, 1490, 50, 260, 1490, 1300);      // warm rim light from the sunset
+    rg.addColorStop(0, 'rgba(255,170,110,1)'); rg.addColorStop(1, 'rgba(255,170,110,0)');
+    c.strokeStyle = rg; c.lineWidth = 16; c.stroke(cliff);
     c.restore();
     for (const [x, y, k] of [[150, 790, 0.7], [300, 600, 0.6], [820, 610, 0.55], [960, 900, 0.5]]) {        // shrubs on the cliff
       const sh = S.puffs([{ x, y, r: 46 * k }, { x: x + 40 * k, y: y + 10, r: 38 * k }, { x: x - 40 * k, y: y + 12, r: 34 * k }]);
-      c.lineWidth = 7; c.strokeStyle = 'rgba(30,50,30,0.9)'; c.stroke(sh); c.fillStyle = '#6cbc56'; c.fill(sh);
+      c.save(); c.clip(sh); c.fillStyle = 'rgba(255,170,110,0.9)'; c.fillRect(x - 200, y - 200, 400, 400);
+      c.translate(6, 7); c.fillStyle = '#16281e'; c.fill(sh); c.restore();
     }
     // cave mouth with Sampati
     const cave = S.ellipse(620, 640, 230, 150);
@@ -718,8 +914,9 @@
     }
     // ledge with Hanuman, Angad, Jambavan
     const ledge = new Path2D(); ledge.moveTo(-100, 1350); ledge.quadraticCurveTo(540, 1270, 1180, 1300); ledge.lineTo(1180, 1460); ledge.quadraticCurveTo(540, 1420, -100, 1490); ledge.closePath();
-    const lg = c.createLinearGradient(0, 1280, 0, 1480); lg.addColorStop(0, '#d8b48c'); lg.addColorStop(1, '#9a7650');
-    c.fillStyle = lg; c.fill(ledge); c.strokeStyle = 'rgba(60,40,30,0.8)'; c.lineWidth = 6; c.stroke(ledge);
+    const lg = c.createLinearGradient(0, 1280, 0, 1480); lg.addColorStop(0, '#6a4a4a'); lg.addColorStop(1, '#2a1a20');
+    c.fillStyle = lg; c.fill(ledge);
+    c.save(); c.clip(ledge); c.strokeStyle = 'rgba(255,180,120,0.7)'; c.lineWidth = 10; c.stroke(ledge); c.restore();
     const talk = u > cName - 0.8 && u < cName + 0.6;
     c.save(); c.translate(200, 1330); c.scale(0.62, 0.62); C.vanara(c, 'jambavan', { t: u, mood: 'sad', slump: 0.6, headTilt: -0.1, eyes: awake ? 'open' : 'closed', look: awake ? 1 : 0 }, LW); c.restore();
     c.save(); c.translate(520, 1310); c.scale(0.66, 0.66); C.vanara(c, 'angad', { t: u, mood: 'sad', slump: 0.4, headTilt: 0.12, mouth: talk ? 0.3 + 0.3 * Math.sin(u * 13) : 0, armUp: talk ? 0.4 : 0 }, LW); c.restore();
@@ -742,7 +939,9 @@
     const cSee = cueStart(sc, 1), cSita = cueStart(sc, 3), cMoment = cueStart(sc, 4), cWings = cueStart(sc, 5);
     if (u < cMoment - 0.1) {
       // close-up of Sampati's eye, then the vision of Lanka
-      skyGrad(c, [[0, '#1a0e2a'], [1, '#3a1a3a']]);
+      skyGrad(c, [[0, '#03020c'], [0.5, '#120a2a'], [1, '#2a0e2a']]);
+      stars(c, 200, 1, u, 8, H);
+      glow(c, 300, 500, 700, 'rgba(140,80,200,0.35)'); glow(c, 800, 1200, 800, 'rgba(60,90,200,0.3)');
       const z = 3.2;
       c.save(); c.translate(540, 1180); c.scale(z, z); c.translate(-126, 66);
       bird(c, 0, 0, 1, -0.1, { pose: { spread: 0.1, theta: 3.0, talons: 0, pitch: 0, tailSpread: 0.3, jaw: 0, grip: 0, wingScale: 0.35, headRot: -0.3 }, lag: 3.0 },
@@ -758,8 +957,9 @@
       if (vr > 4) {
         c.save();
         c.beginPath(); c.arc(540, 580, vr, 0, TAU); c.clip();
-        skyGrad(c, [[0, '#f6a85a'], [0.3, '#ffd8a0'], [0.37, '#8ac0e0']]);
-        sea(c, 700, u, '#3a90c8', '#0b4a7e');
+        skyGrad(c, [[0, '#1a1448'], [0.2, '#8a3a6a'], [0.3, '#ff9a5a'], [0.37, '#ffd8a0']]);
+        glow(c, 540, 700, 500, 'rgba(255,220,150,0.9)');
+        darkSea(c, 700, u, '#2a3a6a', '#08142a', 540);
         // Lanka island, golden city
         const isl = new Path2D(); isl.moveTo(320, 760); isl.quadraticCurveTo(540, 600, 780, 760); isl.closePath();
         cel3(c, isl, ['#8ac06a', '#4a8a3a', '#245020'], LW, 8, 3, 3);
@@ -789,8 +989,10 @@
       // new wings burst open in golden light
       const v = u - cMoment + 0.1;
       const g = smooth((u - cWings + 0.2) / 1.4);
-      skyGrad(c, [[0, '#2a4aa8'], [0.5, '#f0a860'], [1, '#ffe0a0']]);
+      skyGrad(c, [[0, '#050a2a'], [0.35, '#1c2a6a'], [0.6, '#a04a5a'], [1, '#ffb060']]);
+      stars(c, 90, 1 - g * 0.6, u, 9, H * 0.5);
       godRays(c, 540, 820, u, 0.22 + 0.2 * g, 20);
+      motes(c, u, 40, 'rgba(255,230,160,A)', 16);
       const aura = c.createRadialGradient(540, 860, 50, 540, 860, 700);
       aura.addColorStop(0, `rgba(255,240,180,${0.6 + 0.3 * g})`); aura.addColorStop(1, 'rgba(255,200,100,0)');
       c.fillStyle = aura; c.fillRect(0, 0, W, H);
@@ -812,12 +1014,15 @@
   // ================================================================ SCENE 8: brothers together, Jai Shri Ram
   function scene8(c, u, sc) {
     const cJai = cueStart(sc, 3);
-    skyGrad(c, [[0, '#3a5ac8'], [0.4, '#f08a6a'], [0.65, '#ffc888'], [1, '#ffe8c0']]);
-    godRays(c, 540, 1300, u, 0.15, 14);
-    const sun = c.createRadialGradient(540, 1300, 20, 540, 1300, 500);
-    sun.addColorStop(0, 'rgba(255,252,230,1)'); sun.addColorStop(0.2, 'rgba(255,220,150,0.6)'); sun.addColorStop(1, 'rgba(255,190,120,0)');
-    c.fillStyle = sun; c.fillRect(0, 0, W, H);
-    cloudPuffs(c, [[150 - u * 10, 1500, 160, 111], [900 - u * 7, 1580, 180, 112], [520 - u * 14, 1720, 200, 113]], ['#fff6e8', '#ffd8c0', '#d8a0a8']);
+    skyGrad(c, [[0, '#060a2e'], [0.3, '#24286a'], [0.5, '#8a3a6e'], [0.62, '#f07a5a'], [0.72, '#ffc078'], [1, '#ffe0a8']]);
+    stars(c, 70, 0.8, u, 10, H * 0.3);
+    const sun8 = { x: 540, y: 1300 };
+    glow(c, sun8.x, sun8.y, 1200, 'rgba(255,240,200,1)', 'rgba(0,0,0,0)', 'rgba(255,160,100,0.5)');
+    godRays(c, sun8.x, sun8.y, u, 0.2, 16);
+    litCloud(c, 150 - u * 10, 1520, 190, 111, '#ffe6b8', '#8a4a78', '#2a1a4a', sun8);
+    litCloud(c, 900 - u * 7, 1600, 210, 112, '#ffe6b8', '#7a4070', '#24163e', sun8);
+    litCloud(c, 520 - u * 14, 1760, 240, 113, '#ffe6b8', '#6a3a66', '#1c1236', sun8);
+    motes(c, u, 30, 'rgba(255,230,170,A)', 17);
     // Jatayu's spirit flies with his brother
     c.save(); c.globalAlpha = 0.5 + 0.1 * Math.sin(u * 2);
     const spirit = c.createRadialGradient(780, 640, 10, 780, 640, 320);
@@ -883,7 +1088,7 @@
     c.globalCompositeOperation = 'screen'; c.globalAlpha = 0.14; c.drawImage(bloom, 0, 0, W, H);
     c.globalCompositeOperation = 'source-over'; c.globalAlpha = 1;
     const v = c.createRadialGradient(W / 2, H * 0.45, H * 0.34, W / 2, H * 0.5, H * 0.8);
-    v.addColorStop(0, 'rgba(5,5,20,0)'); v.addColorStop(1, 'rgba(5,5,20,0.4)');
+    v.addColorStop(0, 'rgba(5,5,20,0)'); v.addColorStop(1, 'rgba(5,5,20,0.55)');
     c.fillStyle = v; c.fillRect(0, 0, W, H);
     const d = grainData.data;
     for (let i = 0, n = d.length / 4; i < n; i++) { const g = 96 + 64 * hash(f, i, 91); d[4 * i] = d[4 * i + 1] = d[4 * i + 2] = g; d[4 * i + 3] = 255; }
