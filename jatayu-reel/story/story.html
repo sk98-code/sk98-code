@@ -407,9 +407,9 @@
   }
 
   // ================================================================ SCENE 4: Ravana and Sita
-  const RAVANA = { skin: PAL.ravanaSkin, garment: PAL.black, hair: 'crown', crown: 'ravana', mustache: true, tilak: 'shaiv', extraHeads: true, iris: '#8a0d0d', uttariya: PAL.purple };
+  const RAVANA = { skin: PAL.ravanaSkin, garment: PAL.black, hair: 'crown', crown: 'ravana', mustache: true, tilak: 'shaiv', extraHeads: true, iris: ['#3a0000', '#a01010', '#ff6040'], uttariya: PAL.purple };
   const SITA = { female: true, skin: PAL.sitaSkin, garment: PAL.saree, blouse: PAL.pitambar, hair: 'long', pallu: PAL.saree, tilak: 'bindi', nosering: true };
-  const RAMA = { skin: PAL.blueSkin, garment: PAL.pitambar, hair: 'jata', tilak: 'vaishnav', uttariya: PAL.saffron, iris: '#2a1a10' };
+  const RAMA = { skin: PAL.blueSkin, garment: PAL.pitambar, hair: 'jata', tilak: 'vaishnav', uttariya: PAL.saffron, iris: ['#1a0c04', '#4a2a12', '#a8743a'] };
   const LAKSHMAN = { skin: PAL.fairSkin, garment: PAL.saffron, hair: 'jata', tilak: 'vaishnav', uttariya: PAL.green };
 
   function vimanWithCast(c, u, vs, swordSwing, sitaReach, ravMouth) {
@@ -556,7 +556,7 @@
       // Rama and Lakshmana, hands folded
       for (const [x, spec, s] of [[230, LAKSHMAN, 0.9], [860, RAMA, 0.95]]) {
         c.save(); c.translate(x, 1000); c.scale(s, s);
-        C.person(c, spec, { stance: 'stand', t: u, armL: [1.63, -2.15], armR: [1.51, 1.11], head: { mood: 'sad', eyes: 'closed', tilt: x < 540 ? 0.08 : -0.08 } }, { x: x < 540 ? 0.9 : -0.9, y: -0.3 });
+        C.person(c, spec, { stance: 'stand', t: u, armL: [1.536, -2.43], armR: [1.606, 2.43], handL: 'open', handR: 'open', head: { mood: 'sad', eyes: 'closed', tilt: x < 540 ? 0.08 : -0.08 } }, { x: x < 540 ? 0.9 : -0.9, y: -0.3 });
         c.restore();
       }
       const fin = 1 - smooth(v / 0.4);
