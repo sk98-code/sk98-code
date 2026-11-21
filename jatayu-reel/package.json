@@ -1,0 +1,13 @@
+{
+  "name": "jatayu-reel",
+  "private": true,
+  "type": "module",
+  "description": "Jatayu x Pushpak Viman: one 5-second shot in 10 animation styles, rendered to MP4.",
+  "scripts": {
+    "preview": "node render.mjs anims/anime.html --frames 0.6,2.0,4 --out previews",
+    "render:anime": "node render.mjs anims/anime.html assets/clips/anime.mp4"
+  },
+  "devDependencies": {
+    "playwright": "^1.48.0"
+  }
+}
