@@ -151,45 +151,78 @@
     c.fillStyle = g; c.fillRect(-200, -200, W + 400, H + 400);
   }
 
+  /** Smooth rolling hills / soft mountains with a vertical gradient and a gentle outline. */
   function ridge(c, baseY, amp, seed, pal, off = 0, snow = false, jag = 1) {
-    const p = new Path2D();
-    p.moveTo(-200, H + 300);
     const pts = [];
-    for (let x = -200; x <= W + 200; x += 18) {
+    for (let x = -260; x <= W + 260; x += 60) {
       const n = noise1(x + off, seed);
-      const peak = Math.pow(Math.abs(Math.sin((x + off) * 0.0042 + seed)), 1.6 * jag);
-      const y = baseY - amp * (0.45 + 0.35 * n + 0.6 * peak);
-      pts.push([x, y]); p.lineTo(x, y);
+      const peak = Math.pow(Math.abs(Math.sin((x + off) * 0.0036 + seed)), 1.4 * jag);
+      pts.push([x, baseY - amp * (0.4 + 0.3 * n + 0.6 * peak)]);
     }
-    p.lineTo(W + 200, H + 300); p.closePath();
-    cel3(c, p, pal, { x: 0.6, y: -0.8 }, 18, 6, 0);
+    const p = new Path2D();
+    p.moveTo(-260, H + 300); p.lineTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length - 1; i++) {
+      const mx = (pts[i][0] + pts[i + 1][0]) / 2, my = (pts[i][1] + pts[i + 1][1]) / 2;
+      p.quadraticCurveTo(pts[i][0], pts[i][1], mx, my);
+    }
+    p.lineTo(W + 260, pts[pts.length - 1][1]); p.lineTo(W + 260, H + 300); p.closePath();
+    const top = Math.min(...pts.map((q) => q[1]));
+    const g = c.createLinearGradient(0, top, 0, baseY + 200);
+    g.addColorStop(0, pal[0]); g.addColorStop(0.45, pal[1]); g.addColorStop(1, pal[2]);
+    c.fillStyle = g; c.fill(p);
     if (snow) {
       c.save(); c.clip(p);
-      const cap = new Path2D();
-      cap.moveTo(-200, -400);
-      for (const [x, y] of pts) cap.lineTo(x, y + 60 + 30 * Math.sin(x * 0.05));
-      cap.lineTo(W + 200, -400); cap.closePath();
-      c.fillStyle = 'rgba(255,255,255,0.92)'; c.fill(cap);
+      const cap = new Path2D(); cap.moveTo(-260, -400);
+      for (const [x, y] of pts) cap.lineTo(x, y + 50 + 26 * Math.sin(x * 0.05));
+      cap.lineTo(W + 260, -400); cap.closePath();
+      c.fillStyle = 'rgba(255,255,255,0.95)'; c.fill(cap);
       c.restore();
     }
+    c.strokeStyle = 'rgba(40,30,60,0.55)'; c.lineWidth = 4; c.lineJoin = 'round'; c.stroke(p);
   }
 
   function cloudPuffs(c, list, pal, L = LW) {
     for (const [x, y, s, seed] of list) cel3(c, S.cumulus(x, y, s, seed), pal, L, s * 0.12, s * 0.04, 0);
   }
 
-  function tree(c, x, y, s, seed, pal = PAL.green, trunk = PAL.wood) {
+  /** Round, friendly cartoon tree. */
+  function tree(c, x, y, s, seed, pal = ['#9ee070', '#5cbc4a', '#3a9238'], trunk = ['#c89060', '#9a6436', '#6e421e']) {
     c.save(); c.translate(x, y); c.scale(s, s);
-    cel3(c, S.poly([[-16, 0], [16, 0], [10, -170], [-10, -170]]), trunk, LW, 5, 2, 3);
-    const blobs = [];
-    for (let i = 0; i < 9; i++) blobs.push({ x: (hash(seed, i, 1) - 0.5) * 170, y: -190 - hash(seed, i, 2) * 150, r: 50 + 30 * hash(seed, i, 3) });
-    const fol = S.puffs(blobs);
-    c.lineWidth = 7; c.strokeStyle = INK; c.lineJoin = 'round'; c.stroke(fol);
-    cel3(c, fol, pal, LW, 18, 6, 0);
-    c.save(); c.clip(fol); c.strokeStyle = pal[2]; c.lineWidth = 3;
-    for (let i = 0; i < 9; i++) { const b = blobs[i]; c.beginPath(); c.arc(b.x + 8, b.y + 10, b.r * 0.7, 0.2, 1.6); c.stroke(); }
+    const tr = new Path2D(); tr.moveTo(-18, 0); tr.quadraticCurveTo(-12, -90, -10, -150); tr.lineTo(10, -150); tr.quadraticCurveTo(12, -90, 18, 0); tr.closePath();
+    cel3(c, tr, trunk, LW, 6, 0, 4);
+    const w = 0.85 + 0.3 * hash(seed, 1);
+    const canopy = S.puffs([{ x: 0, y: -230, r: 105 * w }, { x: -80 * w, y: -170, r: 70 * w }, { x: 80 * w, y: -175, r: 72 * w }, { x: -10, y: -310, r: 70 * w }]);
+    c.lineWidth = 9; c.strokeStyle = 'rgba(30,50,30,0.9)'; c.lineJoin = 'round'; c.stroke(canopy);
+    c.fillStyle = pal[1]; c.fill(canopy);
+    c.save(); c.clip(canopy);
+    c.fillStyle = pal[2]; c.beginPath(); c.ellipse(30, -110, 190 * w, 80, 0, 0, TAU); c.fill();       // underside shade
+    c.fillStyle = pal[0]; c.globalAlpha = 0.7;
+    c.beginPath(); c.ellipse(-40 * w, -290, 34, 20, -0.5, 0, TAU); c.fill();
+    c.beginPath(); c.ellipse(-90 * w, -195, 20, 12, -0.5, 0, TAU); c.fill();
     c.restore();
     c.restore();
+  }
+
+  /** Grassy meadow with tufts and swaying little flowers. */
+  function meadow(c, y0, t, top = '#9ad86a', bottom = '#4a9a3a', seed = 1) {
+    const g = c.createLinearGradient(0, y0, 0, H);
+    g.addColorStop(0, top); g.addColorStop(1, bottom);
+    c.fillStyle = g; c.fillRect(-200, y0, W + 400, H - y0 + 300);
+    c.strokeStyle = 'rgba(40,90,30,0.6)'; c.lineWidth = 3; c.lineCap = 'round';
+    for (let i = 0; i < 60; i++) {
+      const x = hash(i, seed, 1) * W, y = y0 + 30 + hash(i, seed, 2) * (H - y0);
+      const k = 0.6 + 0.8 * (y - y0) / (H - y0);
+      c.beginPath(); c.moveTo(x - 8 * k, y); c.lineTo(x - 4 * k, y - 12 * k); c.moveTo(x, y); c.lineTo(x, y - 16 * k); c.moveTo(x + 8 * k, y); c.lineTo(x + 4 * k, y - 12 * k); c.stroke();
+    }
+    const cols = ['#ffffff', '#ffe04a', '#ff8ab0', '#ffb04a'];
+    for (let i = 0; i < 34; i++) {
+      const x = hash(i, seed, 3) * W, y = y0 + 40 + hash(i, seed, 4) * (H - y0 - 60);
+      const k = 0.6 + 0.8 * (y - y0) / (H - y0), sw = Math.sin(t * 2 + i) * 3;
+      c.strokeStyle = '#3a8a30'; c.lineWidth = 2.5; c.beginPath(); c.moveTo(x, y); c.lineTo(x + sw, y - 18 * k); c.stroke();
+      c.fillStyle = cols[i % 4];
+      for (let p = 0; p < 5; p++) { const a = p / 5 * TAU; c.beginPath(); c.arc(x + sw + Math.cos(a) * 5 * k, y - 18 * k + Math.sin(a) * 5 * k, 4 * k, 0, TAU); c.fill(); }
+      c.fillStyle = '#ffcc33'; c.beginPath(); c.arc(x + sw, y - 18 * k, 3 * k, 0, TAU); c.fill();
+    }
   }
 
   function godRays(c, x, y, t, alpha = 0.12, n = 12) {
@@ -455,9 +488,9 @@
   }
 
   // ================================================================ SCENE 4: Ravana and Sita
-  const RAVANA = { skin: PAL.ravanaSkin, garment: PAL.black, hair: 'crown', crown: 'ravana', mustache: true, tilak: 'shaiv', extraHeads: true, iris: ['#3a0000', '#a01010', '#ff6040'], uttariya: PAL.purple };
+  const RAVANA = { skin: PAL.ravanaSkin, garment: PAL.black, hair: 'crown', crown: 'ravana', mustache: true, tilak: 'shaiv', extraHeads: true, iris: '#c0181e', uttariya: PAL.purple };
   const SITA = { female: true, skin: PAL.sitaSkin, garment: PAL.saree, blouse: PAL.pitambar, hair: 'long', pallu: PAL.saree, tilak: 'bindi', nosering: true };
-  const RAMA = { skin: PAL.blueSkin, garment: PAL.pitambar, hair: 'jata', tilak: 'vaishnav', uttariya: PAL.saffron, iris: ['#1a0c04', '#4a2a12', '#a8743a'] };
+  const RAMA = { skin: PAL.blueSkin, garment: PAL.pitambar, hair: 'jata', tilak: 'vaishnav', uttariya: PAL.saffron, iris: '#6a3a18' };
   const LAKSHMAN = { skin: PAL.fairSkin, garment: PAL.saffron, hair: 'jata', tilak: 'vaishnav', uttariya: PAL.green };
 
   function vimanWithCast(c, u, vs, swordSwing, sitaReach, ravMouth) {
@@ -498,10 +531,12 @@
     // years pass: overlay text
     const yrs = smooth(u / 0.5) * (1 - smooth((u - cSee + 0.2) / 0.5));
     // forest (Panchavati)
-    ridge(c, 1500, 160, 9.1, ['#8ab87a', '#4a7a42', '#24481e'], 0, false);
-    for (let i = 0; i < 7; i++) tree(c, i * 180 - 40, 1720 + (i % 2) * 40, 1.1 + 0.2 * hash(i, 41), i + 40);
+    ridge(c, 1380, 220, 2.6, ['#b8d8ff', '#8ab0e0', '#6a90c8'], 0, false, 0.8);
+    ridge(c, 1500, 160, 9.1, ['#a8e080', '#6cbc56', '#3e8a3a'], 0, false, 0.6);
+    meadow(c, 1560, u, '#a6e070', '#4e9e3c', 4);
+    for (let i = 0; i < 6; i++) tree(c, 120 + i * 190, 1620 + (i % 2) * 50, 0.8 + 0.2 * hash(i, 41), i + 40, i % 2 ? ['#b4ea86', '#6cc456', '#46a040'] : undefined);
     // the big tree Jatayu perches on
-    tree(c, 230, 1640, 1.9, 99, ['#7ac06a', '#3c8a3a', '#1e5222']);
+    tree(c, 230, 1700, 1.75, 99);
     const vT = clamp((u - cSee + 0.3) / (sc.length - cSee));
     let vs = { x: lerp(1450, 560, smooth(vT * 1.6)), y: 930 + 10 * Math.sin(u * 1.5), rot: 0.02 * Math.sin(u), scale: 1 };
     if (u > cCut) vs.x = lerp(560, -500, smooth((u - cCut) / 2.8));
@@ -577,9 +612,9 @@
       const g = c.createRadialGradient(540, 1000, 40, 540, 1000, 600);
       g.addColorStop(0, 'rgba(255,220,150,0.8)'); g.addColorStop(1, 'rgba(255,200,120,0)');
       c.fillStyle = g; c.fillRect(0, 0, W, H);
-      for (let i = 0; i < 6; i++) tree(c, i * 210 - 60, 1180 + (i % 2) * 30, 1.3, 60 + i, ['#5a7a3a', '#2e4a22', '#14260e']);
-      const gr = c.createLinearGradient(0, 1150, 0, H); gr.addColorStop(0, '#5a6a2a'); gr.addColorStop(1, '#2a3412');
-      c.fillStyle = gr; c.fillRect(0, 1150, W, H);
+      ridge(c, 1100, 160, 3.7, ['#d88a8a', '#a86a7a', '#7a4a6a'], 0, false, 0.7);
+      for (let i = 0; i < 6; i++) tree(c, i * 210 - 40, 1200 + (i % 2) * 30, 1.0, 60 + i, ['#a0c070', '#6a9a46', '#46703a'], ['#a87850', '#7a5032', '#52321a']);
+      meadow(c, 1170, u, '#8ab45a', '#3e6a2a', 7);
       const zoom = 1 + u * 0.015;
       c.save(); c.translate(540, 1200); c.scale(zoom, zoom); c.translate(-540, -1200);
       // Lakshmana standing behind, sad
@@ -655,11 +690,19 @@
     sea(c, 1500, u);
     // Vindhya cliffs
     const cliff = new Path2D();
-    cliff.moveTo(-100, 2400); cliff.lineTo(-100, 900); cliff.lineTo(200, 760); cliff.lineTo(380, 520); cliff.lineTo(560, 470);
-    cliff.lineTo(760, 560); cliff.lineTo(900, 700); cliff.lineTo(1000, 1200); cliff.lineTo(1180, 1400); cliff.lineTo(1180, 2400); cliff.closePath();
-    cel3(c, cliff, ['#c8a886', '#8a6a4c', '#4e3826'], LW, 30, 8, 4);
-    c.strokeStyle = 'rgba(60,40,25,0.5)'; c.lineWidth = 3;
-    for (let i = 0; i < 18; i++) { const x = hash(i, 81) * W, y = 700 + hash(i, 82) * 1200; c.beginPath(); c.moveTo(x, y); c.lineTo(x + 40, y + 60); c.stroke(); }
+    cliff.moveTo(-100, 2400); cliff.lineTo(-100, 900); cliff.quadraticCurveTo(60, 780, 200, 760); cliff.quadraticCurveTo(300, 560, 400, 520);
+    cliff.quadraticCurveTo(480, 450, 600, 470); cliff.quadraticCurveTo(740, 500, 800, 580); cliff.quadraticCurveTo(900, 660, 920, 800);
+    cliff.quadraticCurveTo(960, 1100, 1060, 1220); cliff.quadraticCurveTo(1140, 1320, 1180, 1400); cliff.lineTo(1180, 2400); cliff.closePath();
+    const cg = c.createLinearGradient(0, 450, 0, 1600); cg.addColorStop(0, '#e8c8a0'); cg.addColorStop(0.5, '#c09a74'); cg.addColorStop(1, '#8a6a4c');
+    c.fillStyle = cg; c.fill(cliff); c.strokeStyle = 'rgba(60,40,30,0.8)'; c.lineWidth = 6; c.stroke(cliff);
+    c.save(); c.clip(cliff);
+    c.fillStyle = 'rgba(120,80,50,0.25)';                                  // soft rock layers
+    for (let i = 0; i < 6; i++) { c.beginPath(); c.ellipse(200 + i * 160, 820 + i * 130, 260, 40, -0.15, 0, TAU); c.fill(); }
+    c.restore();
+    for (const [x, y, k] of [[150, 790, 0.7], [300, 600, 0.6], [820, 610, 0.55], [960, 900, 0.5]]) {        // shrubs on the cliff
+      const sh = S.puffs([{ x, y, r: 46 * k }, { x: x + 40 * k, y: y + 10, r: 38 * k }, { x: x - 40 * k, y: y + 12, r: 34 * k }]);
+      c.lineWidth = 7; c.strokeStyle = 'rgba(30,50,30,0.9)'; c.stroke(sh); c.fillStyle = '#6cbc56'; c.fill(sh);
+    }
     // cave mouth with Sampati
     const cave = S.ellipse(620, 640, 230, 150);
     c.fillStyle = '#20140c'; c.fill(cave); c.strokeStyle = INK; c.lineWidth = 5; c.stroke(cave);
@@ -674,8 +717,9 @@
       c.restore();
     }
     // ledge with Hanuman, Angad, Jambavan
-    const ledge = S.poly([[-100, 1340], [1180, 1290], [1180, 1440], [-100, 1480]]);
-    cel3(c, ledge, ['#b09070', '#76563c', '#42301e'], LW, 14, 5, 4);
+    const ledge = new Path2D(); ledge.moveTo(-100, 1350); ledge.quadraticCurveTo(540, 1270, 1180, 1300); ledge.lineTo(1180, 1460); ledge.quadraticCurveTo(540, 1420, -100, 1490); ledge.closePath();
+    const lg = c.createLinearGradient(0, 1280, 0, 1480); lg.addColorStop(0, '#d8b48c'); lg.addColorStop(1, '#9a7650');
+    c.fillStyle = lg; c.fill(ledge); c.strokeStyle = 'rgba(60,40,30,0.8)'; c.lineWidth = 6; c.stroke(ledge);
     const talk = u > cName - 0.8 && u < cName + 0.6;
     c.save(); c.translate(200, 1330); c.scale(0.62, 0.62); C.vanara(c, 'jambavan', { t: u, mood: 'sad', slump: 0.6, headTilt: -0.1, eyes: awake ? 'open' : 'closed', look: awake ? 1 : 0 }, LW); c.restore();
     c.save(); c.translate(520, 1310); c.scale(0.66, 0.66); C.vanara(c, 'angad', { t: u, mood: 'sad', slump: 0.4, headTilt: 0.12, mouth: talk ? 0.3 + 0.3 * Math.sin(u * 13) : 0, armUp: talk ? 0.4 : 0 }, LW); c.restore();
