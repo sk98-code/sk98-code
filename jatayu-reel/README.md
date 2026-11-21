@@ -56,23 +56,26 @@ frame number), so renders are identical each run.
 
 ---
 
-# Story reel: सम्पाती और जटायु (113 s)
+# Story reel: सम्पाती और जटायु (2:43)
 
 A complete animated story in Hindi with narration, captions and all characters:
 Sampati, Jatayu (young and old), Surya, Ravana (ten heads), Sita, the Pushpak Viman,
 Rama, Lakshmana, Hanuman, Angad and Jambavan.
 
-| # | Scene | Time |
-|---|-------|------|
-| 0 | Title: सम्पाती और जटायु | 0.0 – 3.2 |
-| 1 | Aruna's two sons fly at dawn over the Himalaya | 3.2 – 11.6 |
-| 2 | The race to touch the sun | 11.6 – 21.3 |
-| 3 | Jatayu's wings catch fire; Sampati shields him, burns and falls on Vindhya | 21.3 – 39.4 |
-| 4 | Years later: Ravana takes Sita in the Pushpak; old Jatayu fights; wings cut | 39.4 – 57.5 |
-| 5 | Rama and Lakshmana; Jatayu points south and dies; last rites | 57.5 – 70.4 |
-| 6 | Vindhya: Hanuman, Angad, Jambavan; Sampati hears his brother's name and weeps | 70.4 – 86.8 |
-| 7 | Sampati's divine sight finds Sita in Ashok Vatika; his new wings grow | 86.8 – 99.5 |
-| 8 | The brothers fly together again; जय श्री राम | 99.5 – 113.0 |
+| Part | What happens |
+|------|--------------|
+| Hook (0–6 s) | Four fast teaser cuts with big text: burning wings, Ravana's sword, Sampati weeping, "ये दोनों सगे भाई थे!" |
+| Title | सम्पाती और जटायु — दो भाइयों की अमर कथा |
+| 1–3 | Aruna's sons at dawn; the race to the sun; Sampati shields Jatayu, burns and falls on Vindhya |
+| Card | "पर असली परीक्षा... अभी बाकी थी" |
+| 4 | Ravana takes Sita; ~24 s fight with no narration (crown knocked off, arrows dodged, bow snapped, claw strike, wing blasts, battle cry, Chandrahas swings), then the wings are cut |
+| 5–6 | Rama and Lakshmana, last rites; Vindhya: the search party meets Sampati |
+| Card | "और फिर... वो हुआ जिसकी किसी ने कल्पना भी नहीं की थी" |
+| 7–8 | Divine sight finds Sita; new wings; the brothers fly together — जय श्री राम |
+| End | "ऐसी और कथाओं के लिए Follow करें" |
+
+The soundtrack (built by `build.mjs`) mixes the narration with a tanpura-style drone,
+taiko-style fight drums and synthesised sound effects timed to the fight beats.
 
 ```
 story/audio/s1..s8.mp3   narration (ElevenLabs, "Ayush M – Deep Mythology Narrator", eleven_v4)

@@ -663,27 +663,213 @@
 
   // ================================================================ SCENE 4: Ravana and Sita
   const RAVANA = { skin: PAL.ravanaSkin, garment: PAL.black, hair: 'crown', crown: 'ravana', mustache: true, tilak: 'shaiv', extraHeads: true, iris: '#c0181e', uttariya: PAL.purple };
+  const RAVANA_NOCROWN = Object.assign({}, RAVANA, { crown: undefined });
   const SITA = { female: true, skin: PAL.sitaSkin, garment: PAL.saree, blouse: PAL.pitambar, hair: 'long', pallu: PAL.saree, tilak: 'bindi', nosering: true };
   const RAMA = { skin: PAL.blueSkin, garment: PAL.pitambar, hair: 'jata', tilak: 'vaishnav', uttariya: PAL.saffron, iris: '#6a3a18' };
   const LAKSHMAN = { skin: PAL.fairSkin, garment: PAL.saffron, hair: 'jata', tilak: 'vaishnav', uttariya: PAL.green };
 
-  function vimanWithCast(c, u, vs, swordSwing, sitaReach, ravMouth) {
+  function vimanWithCast(c, u, vs, o) {
     K.viman(c, u, vs);
     c.save();
     c.translate(vs.x, vs.y); c.rotate(vs.rot);
     c.beginPath(); c.rect(-400, -900, 800, 790); c.clip();         // hide legs behind the hull rim
     c.save(); c.translate(-95, -150); c.scale(0.36, 0.36);
-    C.person(c, SITA, { stance: 'kneel', t: u, armL: [3.4 - 0.4 * sitaReach, -0.3], armR: [2.9 - 0.6 * sitaReach, -0.2], head: { mood: 'sad', mouth: 0.4 + 0.3 * Math.sin(u * 6), turn: -0.5, look: -1 } }, LW);
+    const sr = o.sitaReach || 0;
+    C.person(c, SITA, { stance: 'kneel', t: u, armL: [3.4 - 0.9 * sr, -0.3], armR: [2.9 - 1.0 * sr, -0.2], head: { mood: 'sad', expr: o.sitaGasp ? 'gasp' : undefined, mouth: o.sitaGasp ? 0 : 0.4 + 0.3 * Math.sin(u * 6), turn: -0.5, look: -1, tears: o.sitaTears || 0 } }, LW);
     c.restore();
-    c.save(); c.translate(95, -185); c.scale(0.4, 0.4);
-    C.person(c, RAVANA, { stance: 'stand', t: u, armL: [2.6, 0.4], armR: [swordSwing, -0.4], props: { sword: swordSwing - 0.5 }, head: { mood: 'angry', mouth: ravMouth, turn: 0.3 } }, LW);
+    c.save(); c.translate(95 + (o.ravX || 0), -185); c.rotate(o.ravLean || 0); c.scale(0.4, 0.4);
+    const spec = o.noCrown ? RAVANA_NOCROWN : RAVANA;
+    const props = {};
+    if (o.bow) { props.bow = 'left'; props.bowAngle = o.bowAngle ?? -0.6; }
+    if (o.sword !== undefined) props.sword = o.sword;
+    C.person(c, spec, { stance: 'stand', t: u, armL: o.armL || [2.6, 0.4], armR: o.armR || [1.0, 0.6], props,
+      head: { mood: o.ravMood || 'angry', expr: o.ravExpr, mouth: o.ravMouth ?? 0.2, turn: 0.3, tilt: o.ravTilt || 0 } }, LW);
     c.restore();
+    c.restore();
+  }
+
+  // ---------------------------------------------------------------- the Ravana–Jatayu fight
+  const keyPath = (keys, f) => {                                   // keys: [[time, x, y], ...] → smooth position
+    if (f <= keys[0][0]) return { x: keys[0][1], y: keys[0][2] };
+    for (let i = 0; i < keys.length - 1; i++) {
+      const [t0, x0, y0] = keys[i], [t1, x1, y1] = keys[i + 1];
+      if (f <= t1) { const k = smooth((f - t0) / (t1 - t0)); return { x: lerp(x0, x1, k), y: lerp(y0, y1, k) }; }
+    }
+    const l = keys[keys.length - 1]; return { x: l[1], y: l[2] };
+  };
+
+  function fightScene(c, u, sc) {
+    const B = sc.fight.beats, f = u - sc.fight.from, D = sc.fight.to - sc.fight.from;
+    const fr = Math.round(u * FPS);
+
+    // ---- close-up inserts
+    if (f >= B.slashIn && f < B.slashOut) {                         // claws rake Ravana
+      const k = (f - B.slashIn) / (B.slashOut - B.slashIn);
+      moodBg(c, 'rage', k, u, 540, 760);
+      c.save(); c.translate((hash(fr, 5) - 0.5) * 16, (hash(fr, 6) - 0.5) * 16);
+      bust(c, RAVANA_NOCROWN, { stance: 'stand', t: u, armL: [-2.0, -1.3], armR: [-1.15, 1.3], head: { mood: 'shock', expr: 'shout', turn: -0.2, tilt: -0.12 } }, 2.6, 0, 0, k);
+      c.restore();
+      for (let i = 0; i < 3; i++) {                                 // three claw marks
+        const s = clamp((f - B.slash - i * 0.12) / 0.14);
+        if (s <= 0) continue;
+        const a = 1 - smooth((f - B.slash - 0.9) / 0.6);
+        c.save(); c.globalAlpha = a; c.lineCap = 'round';
+        const x0 = 180 + i * 150, y0 = 380, x1 = x0 + 420, y1 = y0 + 760;
+        c.strokeStyle = '#ff2a40'; c.lineWidth = 34; c.beginPath(); c.moveTo(x0, y0); c.lineTo(lerp(x0, x1, s), lerp(y0, y1, s)); c.stroke();
+        c.strokeStyle = '#ffffff'; c.lineWidth = 14; c.stroke();
+        c.restore();
+      }
+      insertFrame(c); return;
+    }
+    if (f >= B.cryIn && f < B.cryOut) {                             // Jatayu's battle cry
+      const k = (f - B.cryIn) / (B.cryOut - B.cryIn);
+      moodBg(c, 'rage', k, u, 540, 880);
+      const z = 2.5 * (1 + 0.06 * k);
+      c.save(); c.translate((hash(fr, 7) - 0.5) * 10, (hash(fr, 8) - 0.5) * 10);
+      bird(c, 540 - 126 * z, 900 + 66 * z, z, -0.1, flyPose(u, { freq: 4, amp: 0.5, center: 4.0, jaw: 1, talons: 1 }), { pal: BIRD.jatayuOld });
+      c.restore();
+      insertFrame(c); return;
+    }
+
+    // ---- wide shot: golden-hour sky, the viman close to camera
+    skyGrad(c, [[0, '#0c1a3e'], [0.35, '#24467e'], [0.58, '#6a6aa0'], [0.72, '#e8a070'], [0.82, '#ffd8a0'], [1, '#ffd8a0']]);
+    const sun = { x: 900, y: 1500 };
+    glow(c, sun.x, sun.y, 1200, 'rgba(255,220,160,0.9)', 'rgba(0,0,0,0)', 'rgba(255,160,90,0.4)');
+    for (let i = 0; i < 4; i++) {
+      const x = ((hash(i, 71) * W * 1.6 - u * (60 + 40 * i)) % (W + 600) + W + 600) % (W + 600) - 300;
+      litCloud(c, x, 380 + i * 260, 120 + 50 * hash(i, 72), 70 + i, '#ffe0b0', '#5a6a9a', '#1e2650', sun);
+    }
+    godRays(c, sun.x, sun.y, u, 0.12, 12);
+    const shake = (f < 0.5 ? 1 - f / 0.5 : 0) * 18 + (Math.abs(f - B.bow) < 0.4 ? 10 : 0) + B.buffet.reduce((s, b) => s + (Math.abs(f - b - 0.1) < 0.3 ? 8 : 0), 0);
+    c.save();
+    c.translate((hash(fr, 9) - 0.5) * shake, (hash(fr, 10) - 0.5) * shake);
+    const hitTilt = -0.06 * Math.exp(-3 * Math.max(0, f)) * Math.sin(Math.max(0, f) * 9);
+    const VS = 1.05;
+    const vs = { x: 600, y: 1240 + 12 * Math.sin(u * 1.4), rot: 0.02 * Math.sin(u) + hitTilt, scale: 1 };
+    const R = { x: vs.x + 95 * VS, y: vs.y - 303 * VS };           // Ravana's head
+    const Z = 1.42;                                                 // camera close on Ravana and the fight above him
+    c.translate(560, 1020); c.scale(Z, Z); c.translate(-(R.x - 170), -(R.y + 60));
+
+    // Ravana's pose for this beat
+    const o = { noCrown: f > 0.05, sitaReach: 0.8 + 0.2 * Math.sin(u * 3), sitaGasp: true, ravMood: 'angry', ravMouth: 0.3 };
+    if (f < 1.5) { o.ravMood = 'shock'; o.ravExpr = 'shout'; o.ravTilt = -0.2 * (1 - f / 1.5); }
+    if (f >= 3.6 && f < B.bow) { o.bow = true; o.armL = [-2.45, 0.05]; o.armR = [-2.9, 0.4]; o.bowAngle = -2.4; o.ravExpr = 'shout'; }
+    if (f >= B.bow && f < B.slashIn) { o.ravMood = 'shock'; o.ravExpr = 'gasp'; o.armL = [-2.2, -0.6]; }
+    if (f >= B.slashOut && f < B.cryIn) {                           // staggered by the wing blasts
+      const s = smooth((f - B.slashOut) / 1.5);
+      o.ravX = 30 * s; o.ravLean = 0.12 * s; o.ravMood = 'shock'; o.armL = [-2.0, -1.2]; o.armR = [-1.1, 1.2];
+    }
+    if (f >= B.cryOut) {
+      o.ravExpr = 'shout';
+      if (f >= B.draw) {
+        let sw = -2.2;
+        for (const s of B.swings) { const k = (f - s) / 0.35; if (k > 0 && k < 1) sw = lerp(-2.2, 0.7, smooth(k)); else if (k >= 1 && k < 2) sw = lerp(0.7, -2.2, smooth(k - 1)); }
+        o.sword = sw; o.armR = [-1.25 + (sw + 2.2) * 0.5, -0.8];
+      } else { o.armR = [0.6, 1.2]; }
+    }
+    c.save(); c.translate(vs.x, vs.y); c.scale(VS, VS); c.translate(-vs.x, -vs.y);
+    vimanWithCast(c, u, vs, o);
+    c.restore();
+
+    // crown knocked off, tumbling away
+    if (f > 0 && f < 3.2) {
+      c.save(); c.translate(R.x - 160 * f, R.y - 90 * f + 260 * f * f); c.rotate(-f * 5); c.scale(0.4 * 1.22 * VS, 0.4 * 1.22 * VS);
+      C.crown(c, 'ravana', LW); c.restore();
+    }
+    // bow snapped in two
+    if (f > B.bow && f < B.bow + 2.2) {
+      const g = f - B.bow;
+      for (const sd of [-1, 1]) {
+        c.save(); c.translate(R.x - 150 + sd * 40 * g, R.y + 40 + 380 * g * g); c.rotate(sd * g * 4); c.scale(0.42, 0.42);
+        const half = new Path2D(); half.moveTo(0, 0); half.quadraticCurveTo(-60, sd * -100, -4, sd * -200); half.lineTo(8, sd * -194); half.quadraticCurveTo(-44, sd * -100, 10, 0); half.closePath();
+        cel3(c, half, C.PAL.wood, LW, 3, 0, 4); c.restore();
+      }
+    }
+
+    // Jatayu's flight path (relative to Ravana's head)
+    const P = (dx, dy) => [R.x + dx, R.y + dy];
+    const keys = [[0, ...P(-70, -40)], [2.4, ...P(-420, -480)], [3.6, ...P(-380, -560)], [4.2, ...P(-330, -600)], [5.0, ...P(-460, -520)],
+      [5.8, ...P(-300, -640)], [7.0, ...P(-420, -420)], [B.bow, ...P(-170, 40)], [B.slashIn, ...P(260, -260)],
+      [B.slashOut, ...P(-60, -160)], [B.cryIn, ...P(-230, -170)], [B.cryOut, ...P(-260, -200)], [B.draw, ...P(-380, -460)],
+      [B.swings[0] - 0.2, ...P(-140, -130)], [B.swings[0] + 0.45, ...P(-280, -460)], [B.swings[1] - 0.2, ...P(-150, -60)],
+      [B.swings[1] + 0.45, ...P(-420, -200)], [B.charge, ...P(-260, -720)], [D, ...P(-140, -300)]];
+    const p = keyPath(keys, f), p2 = keyPath(keys, f - 0.05);
+    const vx = p.x - p2.x, vy = p.y - p2.y;
+    let heading = Math.atan2(vy, vx);
+    const facingLeft = vx < -0.5;
+    // barrel roll on each dodge
+    let roll = 0;
+    for (const a of [...B.arrows.map((x) => x + 0.25), ...B.swings.map((x) => x + 0.15)]) { const k = (f - a) / 0.45; if (k > 0 && k < 1) roll = Math.sin(k * Math.PI); }
+    const hovering = Math.hypot(vx, vy) < 4;
+    const buffet = f >= B.slashOut && f < B.cryIn;
+    const fp = flyPose(u, { freq: buffet ? 4.2 : hovering ? 2.6 : 3.2, amp: buffet ? 1.15 : 1, jaw: (f < 0.6 || Math.abs(f - 2.0) < 0.6 || Math.abs(f - B.charge) < 0.6) ? 0.9 : 0.2,
+                          talons: (f < 0.8 || Math.abs(f - B.bow) < 0.6 || (f > B.charge)) ? 1 : 0.3 });
+    if (hovering || buffet) heading = facingLeft ? Math.PI : 0;
+    // keep him upright: flip when flying left
+    c.save();
+    if (Math.cos(heading) < 0) { c.translate(p.x, p.y); c.scale(-1, 1); c.translate(-p.x, -p.y); heading = Math.PI - heading; }
+    bird(c, p.x, p.y + roll * 30, 0.95, Math.max(-1.1, Math.min(1.1, heading)) * 0.7 + roll * 0.5, fp, { pal: BIRD.jatayuOld });
+    c.restore();
+
+    // arrows
+    B.arrows.forEach((a, i) => {
+      const k = (f - a) / 0.5;
+      if (k < 0 || k > 1.4) return;
+      const from = { x: R.x - 120, y: R.y + 30 };
+      const tgt = keyPath(keys, a + 0.5); tgt.x += (i % 2 ? 90 : -90); tgt.y += 70;
+      const x = lerp(from.x, tgt.x, k), y = lerp(from.y, tgt.y, k), ang = Math.atan2(tgt.y - from.y, tgt.x - from.x);
+      c.save(); c.translate(x, y); c.rotate(ang);
+      c.strokeStyle = 'rgba(255,255,255,0.5)'; c.lineWidth = 3; c.beginPath(); c.moveTo(-160, 0); c.lineTo(-40, 0); c.stroke();
+      c.strokeStyle = INK; c.lineWidth = 7; c.beginPath(); c.moveTo(-50, 0); c.lineTo(30, 0); c.stroke();
+      c.strokeStyle = '#a06a3a'; c.lineWidth = 4; c.stroke();
+      c.fillStyle = '#d8dde6'; c.strokeStyle = INK; c.lineWidth = 2.5; c.beginPath(); c.moveTo(30, -8); c.lineTo(48, 0); c.lineTo(30, 8); c.closePath(); c.fill(); c.stroke();
+      c.fillStyle = '#ff5a4a'; c.beginPath(); c.moveTo(-50, 0); c.lineTo(-62, -10); c.lineTo(-40, 0); c.lineTo(-62, 10); c.closePath(); c.fill();
+      c.restore();
+    });
+    // sword arcs
+    for (const s of B.swings) {
+      const k = (f - s) / 0.45;
+      if (k > 0 && k < 1) {
+        c.save(); c.globalAlpha = 1 - k; c.lineCap = 'round';
+        c.strokeStyle = '#ffffff'; c.lineWidth = 22; c.beginPath(); c.arc(R.x + 40, R.y + 60, 260, -2.8, -2.8 + 2.6 * smooth(k * 1.6)); c.stroke();
+        c.strokeStyle = '#7ad8ff'; c.lineWidth = 7; c.stroke();
+        c.restore();
+      }
+    }
+    // sword glint on the draw
+    const gl = f - B.draw;
+    if (gl > 0 && gl < 0.6) { c.save(); c.globalAlpha = 1 - gl / 0.6; K.starBurst(c, R.x - 40, R.y - 220, 10, 90, 4, gl * 2); c.fillStyle = '#ffffff'; c.fill(); c.restore(); }
+    // wind blasts toward Ravana
+    if (buffet) {
+      c.save(); c.strokeStyle = 'rgba(255,255,255,0.55)'; c.lineCap = 'round';
+      for (let i = 0; i < 16; i++) {
+        const y = p.y - 150 + hash(fr, i, 1) * 300, x = p.x + 60 + hash(fr, i, 2) * 300, l = 80 + 160 * hash(fr, i, 3);
+        c.lineWidth = 3 + 5 * hash(fr, i, 4); c.beginPath(); c.moveTo(x, y); c.lineTo(x + l, y + 10); c.stroke();
+      }
+      c.restore();
+    }
+    // impact flashes
+    for (const [t0, x, y, r] of [[0, R.x - 40, R.y - 40, 200], [B.bow, R.x - 160, R.y + 40, 160]]) {
+      const h = f - t0;
+      if (h > 0 && h < 0.35) { c.save(); c.globalAlpha = 1 - h / 0.35; K.starBurst(c, x, y, 40, r, 10, h); c.fillStyle = '#fff4b8'; c.fill(); c.lineWidth = 6; c.strokeStyle = '#ff9a1c'; c.stroke(); c.restore(); }
+    }
+    // speed lines while diving
+    const speed = Math.hypot(vx, vy);
+    if (speed > 22) {
+      c.save(); c.strokeStyle = `rgba(255,255,255,${Math.min(0.6, (speed - 22) / 40)})`; c.lineCap = 'round';
+      for (let i = 0; i < 22; i++) {
+        const x = hash(fr, i, 11) * W, y = hash(fr, i, 12) * H, l = 200 + 300 * hash(fr, i, 13);
+        c.lineWidth = 2 + 3 * hash(fr, i, 14); c.beginPath(); c.moveTo(x, y); c.lineTo(x - vx / speed * l, y - vy / speed * l); c.stroke();
+      }
+      c.restore();
+    }
     c.restore();
   }
 
   function scene4(c, u, sc) {
     const cSee = cueStart(sc, 1), cAttack = cueStart(sc, 4), cSword = cueStart(sc, 5), cCut = cueStart(sc, 6);
     const cSita = cueStart(sc, 2), cPush = cueStart(sc, 3);
+    if (sc.fight && u >= sc.fight.from && u < sc.fight.to) return fightScene(c, u, sc);
     if (u >= cSita && u < cPush) {                                // Sita, terrified, reaching for help
       const k = (u - cSita) / (cPush - cSita);
       moodBg(c, 'drama', k, u);
@@ -695,7 +881,7 @@
       moodBg(c, 'rage', k, u, 540, 700);
       const fr = Math.round(u * FPS);
       c.save(); c.translate((hash(fr, 3) - 0.5) * 10, (hash(fr, 4) - 0.5) * 10);
-      bust(c, RAVANA, { stance: 'stand', t: u, armL: [2.4, 0.5], armR: [-1.25, -0.8], handR: 'grip', props: { sword: -2.2 + 0.25 * k },
+      bust(c, RAVANA_NOCROWN, { stance: 'stand', t: u, armL: [2.4, 0.5], armR: [-1.25, -0.8], handR: 'grip', props: { sword: -2.2 + 0.25 * k },
                          head: { mood: 'angry', expr: 'shout', turn: 0.25 } }, 2.3, -10, 40, k);
       c.restore();
       insertFrame(c); return;
@@ -724,7 +910,7 @@
     // Ravana's sword: raised, then the slash at the cut
     const sw = u < cSword ? 2.8 : u < cCut - 0.15 ? lerp(2.8, -1.2, smooth((u - cSword) / (cCut - 0.15 - cSword))) : lerp(-1.2, 1.4, smooth((u - cCut + 0.15) / 0.25));
     c.save(); c.translate(vs.x, vs.y); c.scale(0.78, 0.78); c.translate(-vs.x, -vs.y);
-    vimanWithCast(c, u, vs, sw, smooth((u - cSee) / 1.5), u > cAttack ? 0.6 : 0.2);
+    vimanWithCast(c, u, vs, { armR: [sw, -0.4], sword: sw - 0.5, sitaReach: smooth((u - cSee) / 1.5), ravMouth: u > cAttack ? 0.6 : 0.2, noCrown: u > cAttack + 1 });
     c.restore();
 
     // Jatayu: perched → attacks → wings cut → falls
@@ -1049,17 +1235,72 @@
   }
 
   const SCENES = [null, scene1, scene2, scene3, scene4, scene5, scene6, scene7, scene8];
+  const sceneItem = (id) => TL.items.find((it) => it.kind === 'scene' && it.id === id);
+  const bufC = mk(W, H);
+
+  // ================================================================ hook (teaser), cards
+  const HOOK_SHOTS = [
+    { id: 3, at: (sc) => sc.cues[1].start + 1.0, lines: ['एक ने भाई के लिए', 'पंख जलाए...'] },
+    { id: 4, at: (sc) => sc.cues[5].start + 0.8, lines: ['दूसरे ने सीता माँ के लिए', 'पंख कटवाए...'] },
+    { id: 6, at: (sc) => sc.cues[7].start + 0.6, lines: ['ये कहानी बहुत कम', 'लोग जानते हैं...'] },
+    { id: 7, at: (sc) => sc.cues[5].start + 1.6, lines: ['ये दोनों', 'सगे भाई थे!'] },
+  ];
+  function bigText(c, lines, y, a, size = 96, pop = 0) {
+    c.save(); c.globalAlpha = a; c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.font = `${size}px 'Rozha One'`; c.lineJoin = 'round';
+    const s = 1 + 0.25 * (1 - smooth(pop));
+    lines.forEach((ln, i) => {
+      const yy = y + i * size * 1.15;
+      c.save(); c.translate(W / 2, yy); c.scale(s, s);
+      c.strokeStyle = '#1a0408'; c.lineWidth = size * 0.2; c.strokeText(ln, 0, 0);
+      const g = c.createLinearGradient(0, -size / 2, 0, size / 2);
+      g.addColorStop(0, '#fff6c0'); g.addColorStop(0.5, '#ffcc40'); g.addColorStop(1, '#ff8a1a');
+      c.fillStyle = g; c.fillText(ln, 0, 0);
+      c.restore();
+    });
+    c.restore();
+  }
+  function hookScene(c, u) {
+    const len = 6.4 / HOOK_SHOTS.length, i = Math.min(HOOK_SHOTS.length - 1, Math.floor(u / len)), k = (u - i * len) / len;
+    const shot = HOOK_SHOTS[i], sc = sceneItem(shot.id);
+    const b = bufC.getContext('2d');
+    b.setTransform(1, 0, 0, 1, 0, 0); b.globalAlpha = 1; b.filter = 'none'; b.globalCompositeOperation = 'source-over';
+    SCENES[shot.id](b, shot.at(sc) + k * 0.6, sc);
+    const z = 1.14 - 0.1 * smooth(k);                            // punch-in, then settle
+    c.save(); c.translate(W / 2, H / 2); c.scale(z, z); c.translate(-W / 2, -H / 2); c.drawImage(bufC, 0, 0); c.restore();
+    const g = c.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, 'rgba(5,0,10,0.75)'); g.addColorStop(0.4, 'rgba(5,0,10,0.15)'); g.addColorStop(0.7, 'rgba(5,0,10,0.1)'); g.addColorStop(1, 'rgba(5,0,10,0.6)');
+    c.fillStyle = g; c.fillRect(0, 0, W, H);
+    bigText(c, shot.lines, 330, smooth(k * 6), i === 3 ? 120 : 92, k * 5);
+    const fl = 1 - smooth(k * 5);                                  // white flash on every cut
+    if (fl > 0) { c.fillStyle = `rgba(255,250,235,${fl * 0.85})`; c.fillRect(0, 0, W, H); }
+  }
+  function cardScene(c, u, it) {
+    skyGrad(c, [[0, '#04020c'], [0.5, '#140820'], [1, '#2a0a14']]);
+    stars(c, 120, 0.8, u, 21, H);
+    glow(c, 540, 960, 900, 'rgba(255,140,60,0.35)');
+    embers(c, 540, 1900, 1100, 1800, u, 50, 22, '#ffb347');
+    if (it.id === 'end') {                                          // the two brothers fly together
+      bird(c, 300 + u * 40, 1250 + 20 * Math.sin(u * 1.4), 0.6, -0.08, flyPose(u, { freq: 1.4, amp: 0.8 }), { pal: BIRD.golden });
+      c.save(); c.globalAlpha = 0.6;
+      bird(c, 620 + u * 40, 1150 + 20 * Math.sin(u * 1.2), 0.5, -0.08, flyPose(u, { freq: 1.3, amp: 0.8, phase: 0.4 }), { pal: { feather: ['#ffffff', '#e8f0ff', '#b8c8f0', '#ffffff'], featherFar: ['#f0f4ff', '#d0dcf8', '#a0b0e0'], covert: ['#ffffff', '#eef4ff', '#c8d6f4', '#ffffff'], body: ['#ffffff', '#e8f0ff', '#b8c8f0'] } });
+      c.restore();
+    }
+    it.lines.forEach((ln, i) => bigText(c, [ln], 700 + i * 130, smooth((u - 0.2 - i * 0.45) / 0.4), it.lines.length > 2 ? 84 : 104, (u - 0.2 - i * 0.45) * 3));
+    const out = smooth((u - it.length + 0.5) / 0.5);
+    if (out > 0 && it.id === 'end') { c.fillStyle = `rgba(0,0,0,${out})`; c.fillRect(0, 0, W, H); }
+  }
 
   // ================================================================ captions + post
   function captions(c, t) {
-    for (const sc of TL.scenes) {
+    for (const sc of TL.items) {
+      if (!sc.cues) continue;
       for (const q of sc.cues) {
         const a0 = sc.start + q.start - 0.08, a1 = sc.start + q.end + 0.12;
         if (t < a0 || t > a1) continue;
         const a = smooth((t - a0) / 0.15) * (1 - smooth((t - a1 + 0.15) / 0.15));
         c.save(); c.globalAlpha = a;
         c.font = FONT_CAP; c.textAlign = 'center'; c.textBaseline = 'middle';
-        // wrap to 2 lines if too wide
         let lines = [q.text];
         if (c.measureText(q.text).width > 900) {
           const words = q.text.split(' '); let best = 1, bestD = 1e9;
@@ -1098,37 +1339,36 @@
   }
 
   // ================================================================ frame
-  function drawSceneAt(c, idx, t) {
+  function drawItem(c, idx, t) {
+    const it = TL.items[idx], u = t - it.start;
     c.save(); c.setTransform(1, 0, 0, 1, 0, 0);
     c.globalAlpha = 1; c.globalCompositeOperation = 'source-over'; c.filter = 'none';
     let r;
-    if (idx === 0) scene0(c, t);
-    else { const sc = TL.scenes[idx - 1]; r = SCENES[idx](c, t - sc.start, sc); }
+    if (it.kind === 'hook') hookScene(c, u);
+    else if (it.kind === 'title') scene0(c, u);
+    else if (it.kind === 'card') cardScene(c, u, it);
+    else r = SCENES[it.id](c, u, it);
     c.restore();
     return r;
   }
 
-  function sceneIndex(t) {
-    if (t < TL.title) return 0;
-    for (let i = TL.scenes.length - 1; i >= 0; i--) if (t >= TL.scenes[i].start) return i + 1;
-    return 1;
+  function itemIndex(t) {
+    for (let i = TL.items.length - 1; i >= 0; i--) if (t >= TL.items[i].start) return i;
+    return 0;
   }
-  const sceneStart = (i) => (i === 0 ? 0 : TL.scenes[i - 1].start);
 
   function renderFrame(t) {
     const f = Math.round(t * FPS);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.filter = 'none';
-    const i = sceneIndex(t);
-    const r = drawSceneAt(ctx, i, t);
-    // cross-dissolve into the next scene
-    const next = i + 1;
-    if (next <= TL.scenes.length) {
-      const b = sceneStart(next);
-      const k = (t - (b - XFADE)) / XFADE;
+    const i = itemIndex(t);
+    const r = drawItem(ctx, i, t);
+    // cross-dissolve into the next item (hard cut out of the teaser)
+    if (i + 1 < TL.items.length && TL.items[i].kind !== 'hook') {
+      const b = TL.items[i + 1].start, k = (t - (b - XFADE)) / XFADE;
       if (k > 0 && k < 1) {
         const bctx2 = bufB.getContext('2d');
-        drawSceneAt(bctx2, next, t);
+        drawItem(bctx2, i + 1, t);
         ctx.globalAlpha = smooth(k); ctx.drawImage(bufB, 0, 0); ctx.globalAlpha = 1;
       }
     }

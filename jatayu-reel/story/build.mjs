@@ -4,12 +4,14 @@
  *
  *   node story/build.mjs
  *
+ * Timeline (≈2:40): teaser hook → title → scenes 1–3 → mid-hook card → scene 4
+ * (narration split around a ~24 s Ravana–Jatayu fight with no voice) → scenes 5–6 →
+ * mid-hook card → scenes 7–8 → follow card.
+ *
  * - reads audio/s1..s8.mp3 (Hindi narration, one clip per scene)
- * - finds pauses with ffmpeg silencedetect and times each caption chunk over
- *   the speech (proportional to characters, skipping silences)
- * - writes timeline.js (window.TIMELINE) for story.html
- * - writes audio/mix.wav: narration placed on the timeline + tanpura-style drone
- *   + low impact hits, loudness-normalised to -14 LUFS
+ * - times each caption chunk over the speech (silencedetect + character weights)
+ * - writes timeline.js (window.TIMELINE) for story.html, including fight beats
+ * - writes audio/mix.wav: narration + tanpura drone + fight drums + sound effects, -14 LUFS
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
@@ -19,9 +21,10 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const A = (f) => join(here, 'audio', f);
 
-const TITLE = 3.2;          // title card before scene 1
-const LEAD = 0.45;          // silence at the start of each scene before the voice
-const TAIL = [1.0, 0.8, 1.3, 1.3, 1.4, 1.0, 1.2, 2.2]; // breathing room after each line
+const HOOK = 6.4, TITLE = 3.2, CARD = 3.6, OUTRO = 3.8;
+const LEAD = 0.45;
+const TAIL = [1.6, 1.6, 2.6, 1.4, 3.2, 2.2, 2.2, 3.0];
+const FIGHT = 24;                       // seconds of fight inserted into scene 4
 
 const CAPTIONS = [
   ['सूर्य के सारथी अरुण के दो पुत्र थे...', 'बड़ा भाई सम्पाती,', 'और छोटा भाई जटायु।'],
@@ -38,12 +41,19 @@ const CAPTIONS = [
   ['एक भाई ने सूर्य से भाई को बचाया...', 'दूसरे ने धर्म के लिए प्राण दिए।', 'यही है सम्पाती और जटायु की अमर कथा।', 'जय श्री राम!'],
 ];
 
+// fight beats, seconds after Jatayu's first strike (shared with story.html)
+const BEATS = {
+  crown: 0.0, arrows: [4.2, 5.0, 5.8], bow: 8.6,
+  slashIn: 9.6, slash: 10.2, slashOut: 11.8,
+  buffet: [12.4, 13.0], cryIn: 14.2, cry: 14.4, cryOut: 16.0,
+  draw: 16.8, swings: [18.2, 19.8], charge: 21.2,
+};
+
 const duration = (f) => Number(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', f]).toString());
 
 function silences(f, dur) {
   const r = spawnSync('ffmpeg', ['-hide_banner', '-i', f, '-af', 'silencedetect=noise=-36dB:d=0.2', '-f', 'null', '-'], { encoding: 'utf8' });
-  const out = [];
-  let start = null;
+  const out = []; let start = null;
   for (const m of r.stderr.matchAll(/silence_(start|end): ([\d.]+)/g)) {
     if (m[1] === 'start') start = Number(m[2]);
     else if (start !== null) { out.push([start, Number(m[2])]); start = null; }
@@ -52,23 +62,25 @@ function silences(f, dur) {
   return out;
 }
 
-/** Speech time -> real time, skipping silences. */
 function speechMap(dur, sil) {
-  const islands = [];
-  let t = 0;
+  const islands = []; let t = 0;
   for (const [a, b] of sil) { if (a > t) islands.push([t, a]); t = b; }
   if (t < dur) islands.push([t, dur]);
   const total = islands.reduce((s, [a, b]) => s + (b - a), 0);
-  return (u) => {               // u in [0,1] of speech
-    let need = u * total;
-    for (const [a, b] of islands) { if (need <= b - a) return a + need; need -= b - a; }
-    return dur;
-  };
+  return (u) => { let need = u * total; for (const [a, b] of islands) { if (need <= b - a) return a + need; need -= b - a; } return dur; };
 }
 
+const items = [];
+const voices = [];
+let t = 0;
+const push = (it) => { it.start = +t.toFixed(3); items.push(it); t += it.length; return it; };
+
+push({ kind: 'hook', length: HOOK });
+push({ kind: 'title', length: TITLE });
 const scenes = [];
-let t = TITLE;
 for (let i = 0; i < 8; i++) {
+  if (i === 3) push({ kind: 'card', id: 'c1', lines: ['पर असली परीक्षा...', 'अभी बाकी थी'], length: CARD });
+  if (i === 6) push({ kind: 'card', id: 'c2', lines: ['और फिर...', 'वो हुआ जिसकी', 'किसी ने कल्पना भी नहीं की थी'], length: CARD + 0.6 });
   const f = A(`s${i + 1}.mp3`);
   const dur = duration(f);
   const map = speechMap(dur, silences(f, dur));
@@ -78,38 +90,96 @@ for (let i = 0; i < 8; i++) {
   let acc = 0;
   const cues = chunks.map((text, k) => {
     const a = map(acc / total); acc += weights[k];
-    const b = map(acc / total);
-    return { text, start: +(LEAD + a).toFixed(3), end: +(LEAD + b).toFixed(3) };
+    return { text, start: LEAD + a, end: LEAD + map(acc / total) };
   });
-  const len = LEAD + dur + TAIL[i];
-  scenes.push({ id: i + 1, start: +t.toFixed(3), length: +len.toFixed(3), voice: +(t + LEAD).toFixed(3), voiceDur: dur, cues });
-  t += len;
+  const sc = { kind: 'scene', id: i + 1, length: LEAD + dur + TAIL[i], voiceDur: dur };
+  if (i === 3) {                                       // open a gap for the fight before "पर रावण ने..."
+    const split = cues[5].start - LEAD - 0.05;
+    for (const q of cues.slice(5)) { q.start += FIGHT; q.end += FIGHT; }
+    sc.length += FIGHT;
+    sc.fight = { from: +(cues[4].start + 0.9).toFixed(3), to: +cues[5].start.toFixed(3), beats: BEATS };
+    sc.split = split;
+  }
+  sc.cues = cues.map((q) => ({ text: q.text, start: +q.start.toFixed(3), end: +q.end.toFixed(3) }));
+  push(sc);
+  if (i === 3) {
+    voices.push({ file: f, at: sc.start + LEAD, from: 0, to: sc.split });
+    voices.push({ file: f, at: sc.start + LEAD + sc.split + FIGHT, from: sc.split });
+  } else voices.push({ file: f, at: sc.start + LEAD });
+  scenes.push(sc);
 }
-const TOTAL = +t.toFixed(3);
-const timeline = { title: TITLE, total: TOTAL, scenes };
-writeFileSync(join(here, 'timeline.js'), `window.TIMELINE = ${JSON.stringify(timeline, null, 1)};\n`);
-console.log(`timeline: ${TOTAL.toFixed(2)} s`);
-for (const s of scenes) console.log(`  scene ${s.id}: ${s.start.toFixed(2)} → ${(s.start + s.length).toFixed(2)}`);
+push({ kind: 'card', id: 'end', lines: ['ऐसी और कथाओं के लिए', 'Follow करें'], length: OUTRO });
 
-// ---------- soundtrack ----------
-// Drone: Sa (110 Hz) + Pa (165 Hz) + upper Sa, slow swell; tanpura-like pluck every 1.6 s.
-const hits = [scenes[2].start + scenes[2].cues[5].start, scenes[3].start + scenes[3].cues[6].start,
-              scenes[3].start + scenes[3].cues[4].start, scenes[6].start + scenes[6].cues[5].start];
-const inputs = [];
-const filters = [];
-scenes.forEach((s, i) => {
-  inputs.push('-i', A(`s${i + 1}.mp3`));
-  filters.push(`[${i}:a]aresample=48000,adelay=${Math.round(s.voice * 1000)}:all=1[v${i}]`);
+const TOTAL = +t.toFixed(3);
+writeFileSync(join(here, 'timeline.js'), `window.TIMELINE = ${JSON.stringify({ total: TOTAL, items }, null, 1)};\n`);
+console.log(`timeline: ${TOTAL.toFixed(2)} s (${Math.floor(TOTAL / 60)}:${String(Math.round(TOTAL % 60)).padStart(2, '0')})`);
+for (const it of items) console.log(`  ${it.kind}${it.id ? ' ' + it.id : ''}: ${it.start.toFixed(2)} → ${(it.start + it.length).toFixed(2)}`);
+
+// ---------------------------------------------------------------- soundtrack
+const S4 = scenes[3];
+const F0 = S4.start + S4.fight.from;                    // first strike, absolute
+const inputs = [], filters = [], mix = [];
+let n = 0;
+const add = (args, chain, label) => { inputs.push(...args); filters.push(`[${n}:a]${chain}[${label}]`); mix.push(`[${label}]`); n++; };
+const ms = (s) => Math.max(0, Math.round(s * 1000));
+
+voices.forEach((v, k) => {
+  const trim = v.to !== undefined ? `atrim=0:${v.to},` : v.from ? `atrim=${v.from},asetpts=PTS-STARTPTS,` : '';
+  add(['-i', v.file], `${trim}aresample=48000,aformat=channel_layouts=mono,adelay=${ms(v.at)}:all=1`, `v${k}`);
 });
-const drone = `aevalsrc='0.20*sin(2*PI*110*t)*(0.6+0.4*sin(2*PI*0.07*t))+0.12*sin(2*PI*165*t)*(0.6+0.4*sin(2*PI*0.05*t+1))+0.08*sin(2*PI*220*t)+0.05*sin(2*PI*330.5*t)*exp(-mod(t,1.6)*2.2)+0.04*sin(2*PI*440*t)*exp(-mod(t+0.4,1.6)*2.6)':s=48000:d=${TOTAL}`;
-inputs.push('-f', 'lavfi', '-i', drone);
-const di = scenes.length;
-filters.push(`[${di}:a]lowpass=f=1800,volume=0.32,afade=t=in:d=2.5,afade=t=out:st=${TOTAL - 3}:d=3,aformat=channel_layouts=mono[drone]`);
-hits.forEach((h, k) => {
-  inputs.push('-f', 'lavfi', '-i', `aevalsrc='0.9*sin(2*PI*(55+60*exp(-t*9))*t)*exp(-t*3.5)':s=48000:d=1.6`);
-  filters.push(`[${di + 1 + k}:a]adelay=${Math.round(h * 1000)}:all=1,volume=0.8[h${k}]`);
-});
-const mixIn = scenes.map((_, i) => `[v${i}]`).join('') + '[drone]' + hits.map((_, k) => `[h${k}]`).join('');
-filters.push(`${mixIn}amix=inputs=${scenes.length + 1 + hits.length}:normalize=0:duration=longest,apad=whole_dur=${TOTAL},atrim=0:${TOTAL},loudnorm=I=-14:TP=-1.5:LRA=11[out]`);
+// drone (tanpura-like), ducked a little during the fight
+add(['-f', 'lavfi', '-i', `aevalsrc='0.20*sin(2*PI*110*t)*(0.6+0.4*sin(2*PI*0.07*t))+0.12*sin(2*PI*165*t)*(0.6+0.4*sin(2*PI*0.05*t+1))+0.08*sin(2*PI*220*t)+0.05*sin(2*PI*330.5*t)*exp(-mod(t,1.6)*2.2)+0.04*sin(2*PI*440*t)*exp(-mod(t+0.4,1.6)*2.6)':s=48000:d=${TOTAL}`],
+  `lowpass=f=1800,volume=0.3,afade=t=in:d=2,afade=t=out:st=${TOTAL - 3}:d=3`, 'drone');
+// fight drums (taiko-style), 0.5 s pulse with off-beat accents
+const fightLen = S4.fight.to - S4.fight.from + 1.5;
+add(['-f', 'lavfi', '-i', `aevalsrc='0.85*sin(2*PI*(52+90*exp(-mod(t,0.5)*20))*mod(t,0.5))*exp(-mod(t,0.5)*8)+0.45*sin(2*PI*(120+70*exp(-mod(t+0.25,1)*24))*mod(t+0.25,1))*exp(-mod(t+0.25,1)*14)+0.3*sin(2*PI*(90+50*exp(-mod(t+0.125,2)*24))*mod(t+0.125,2))*exp(-mod(t+0.125,2)*10)':s=48000:d=${fightLen}`],
+  `afade=t=in:d=1.2,afade=t=out:st=${fightLen - 1.5}:d=1.5,volume=0.75,adelay=${ms(F0 - 1.2)}:all=1`, 'drums');
+
+const sfx = {
+  boom: `aevalsrc='0.9*sin(2*PI*(42+80*exp(-t*7))*t)*exp(-t*2.6)':s=48000:d=1.8`,
+  thump: `aevalsrc='0.9*sin(2*PI*(60+100*exp(-t*14))*t)*exp(-t*7)':s=48000:d=0.7`,
+  clang: `aevalsrc='0.35*(sin(2*PI*1180*t)+0.7*sin(2*PI*2630*t)+0.5*sin(2*PI*3970*t)+0.3*sin(2*PI*5210*t))*exp(-t*3.2)':s=48000:d=1.4`,
+  screech: `aevalsrc='0.32*sin(2*PI*(1900+500*sin(2*PI*13*t)-700*t)*t)*exp(-t*1.4)*(1-exp(-t*30))':s=48000:d=1.4`,
+};
+const noise = (d, hp, lp, vol, fadeIn, fadeOut) => [['-f', 'lavfi', '-i', `anoisesrc=d=${d}:c=pink:a=0.8`],
+  `highpass=f=${hp},lowpass=f=${lp},afade=t=in:d=${fadeIn},afade=t=out:st=${Math.max(0, d - fadeOut)}:d=${fadeOut},volume=${vol}`];
+let k = 0;
+const at = (kind, time, vol = 1) => {
+  if (sfx[kind]) add(['-f', 'lavfi', '-i', sfx[kind]], `volume=${vol},adelay=${ms(time)}:all=1`, `x${k++}`);
+  else {
+    const [args, chain] = kind === 'whoosh' ? noise(0.55, 300, 2600, vol, 0.25, 0.3)
+      : kind === 'whiz' ? noise(0.35, 1500, 7000, vol * 0.8, 0.1, 0.2)
+      : kind === 'crack' ? noise(0.18, 1800, 9000, vol * 1.4, 0.005, 0.15)
+      : kind === 'slash' ? noise(0.3, 2500, 9000, vol, 0.02, 0.25)
+      : noise(2.2, 200, 6000, vol * 0.6, 2.0, 0.1);      // riser
+    add(args, `${chain},adelay=${ms(time)}:all=1`, `x${k++}`);
+  }
+};
+// hook: a boom on every teaser cut, riser into the title
+for (const h of [0.05, 1.6, 3.2, 4.8]) { at('boom', h, 0.9); at('whoosh', Math.max(0, h - 0.25), 0.7); }
+at('riser', HOOK - 2.2, 0.8); at('boom', HOOK, 1);
+// cards
+for (const it of items.filter((x) => x.kind === 'card')) { at('riser', it.start - 1.4, 0.5); at('boom', it.start + 0.1, 0.8); }
+// story hits
+at('boom', scenes[2].start + scenes[2].cues[5].start, 0.8);
+at('screech', S4.start + S4.cues[4].start + 0.1, 0.8);
+// fight
+const B = BEATS, F = (s) => F0 + s;
+at('whoosh', F(-0.5)); at('thump', F(B.crown)); at('clang', F(B.crown), 0.6);
+at('screech', F(2.0), 0.6);
+for (const a of B.arrows) { at('whiz', F(a)); at('whoosh', F(a + 0.15), 0.5); }
+at('whoosh', F(B.bow - 0.5)); at('crack', F(B.bow)); at('thump', F(B.bow), 0.7);
+at('slash', F(B.slash)); at('slash', F(B.slash + 0.12)); at('slash', F(B.slash + 0.24)); at('boom', F(B.slashIn), 0.6);
+for (const b of B.buffet) { at('whoosh', F(b), 0.9); at('thump', F(b + 0.1), 0.7); }
+at('screech', F(B.cry), 0.9); at('boom', F(B.cryIn), 0.6);
+at('clang', F(B.draw), 0.9);
+for (const s of B.swings) { at('whoosh', F(s), 1); at('slash', F(s + 0.1), 0.6); }
+at('screech', F(B.charge), 0.7); at('riser', F(B.charge - 0.5), 0.6);
+// wings cut
+at('boom', S4.start + S4.cues[6].start, 1); at('slash', S4.start + S4.cues[6].start - 0.1, 1);
+// wings regrow
+at('riser', scenes[6].start + scenes[6].cues[4].start, 0.7); at('boom', scenes[6].start + scenes[6].cues[5].start, 0.9);
+
+filters.push(`${mix.join('')}amix=inputs=${mix.length}:normalize=0:duration=longest,apad=whole_dur=${TOTAL},atrim=0:${TOTAL},loudnorm=I=-14:TP=-1.5:LRA=11[out]`);
 execFileSync('ffmpeg', ['-y', '-loglevel', 'error', ...inputs, '-filter_complex', filters.join(';'), '-map', '[out]', '-ar', '48000', '-ac', '2', A('mix.wav')]);
-console.log('wrote audio/mix.wav');
+console.log(`wrote audio/mix.wav (${mix.length} layers)`);

@@ -1,12 +1,20 @@
 window.TIMELINE = {
- "title": 3.2,
- "total": 112.974,
- "scenes": [
+ "total": 162.574,
+ "items": [
   {
+   "kind": "hook",
+   "length": 6.4,
+   "start": 0
+  },
+  {
+   "kind": "title",
+   "length": 3.2,
+   "start": 6.4
+  },
+  {
+   "kind": "scene",
    "id": 1,
-   "start": 3.2,
-   "length": 8.372,
-   "voice": 3.65,
+   "length": 8.972449000000001,
    "voiceDur": 6.922449,
    "cues": [
     {
@@ -24,13 +32,13 @@ window.TIMELINE = {
      "start": 5.564,
      "end": 7.372
     }
-   ]
+   ],
+   "start": 9.6
   },
   {
+   "kind": "scene",
    "id": 2,
-   "start": 11.572,
-   "length": 9.766,
-   "voice": 12.022,
+   "length": 10.565917999999998,
    "voiceDur": 8.515918,
    "cues": [
     {
@@ -53,13 +61,13 @@ window.TIMELINE = {
      "start": 7.046,
      "end": 8.966
     }
-   ]
+   ],
+   "start": 18.572
   },
   {
+   "kind": "scene",
    "id": 3,
-   "start": 21.338,
-   "length": 18.024,
-   "voice": 21.788,
+   "length": 19.324286,
    "voiceDur": 16.274286,
    "cues": [
     {
@@ -97,14 +105,54 @@ window.TIMELINE = {
      "start": 13.36,
      "end": 16.724
     }
-   ]
+   ],
+   "start": 29.138
   },
   {
+   "kind": "card",
+   "id": "c1",
+   "lines": [
+    "पर असली परीक्षा...",
+    "अभी बाकी थी"
+   ],
+   "length": 3.6,
+   "start": 48.463
+  },
+  {
+   "kind": "scene",
    "id": 4,
-   "start": 39.363,
-   "length": 18.103,
-   "voice": 39.813,
+   "length": 42.202653,
    "voiceDur": 16.352653,
+   "fight": {
+    "from": 9.969,
+    "to": 37.052,
+    "beats": {
+     "crown": 0,
+     "arrows": [
+      4.2,
+      5,
+      5.8
+     ],
+     "bow": 8.6,
+     "slashIn": 9.6,
+     "slash": 10.2,
+     "slashOut": 11.8,
+     "buffet": [
+      12.4,
+      13
+     ],
+     "cryIn": 14.2,
+     "cry": 14.4,
+     "cryOut": 16,
+     "draw": 16.8,
+     "swings": [
+      18.2,
+      19.8
+     ],
+     "charge": 21.2
+    }
+   },
+   "split": 12.551615887218045,
    "cues": [
     {
      "text": "बरसों बीत गए।",
@@ -133,21 +181,21 @@ window.TIMELINE = {
     },
     {
      "text": "पर रावण ने अपनी तलवार से...",
-     "start": 13.052,
-     "end": 15.218
+     "start": 37.052,
+     "end": 39.218
     },
     {
      "text": "उसके पंख काट दिए।",
-     "start": 15.218,
-     "end": 16.803
+     "start": 39.218,
+     "end": 40.803
     }
-   ]
+   ],
+   "start": 52.063
   },
   {
+   "kind": "scene",
    "id": 5,
-   "start": 57.465,
-   "length": 12.926,
-   "voice": 57.915,
+   "length": 14.725918,
    "voiceDur": 11.075918,
    "cues": [
     {
@@ -170,13 +218,13 @@ window.TIMELINE = {
      "start": 7.692,
      "end": 11.526
     }
-   ]
+   ],
+   "start": 94.265
   },
   {
+   "kind": "scene",
    "id": 6,
-   "start": 70.391,
-   "length": 16.444,
-   "voice": 70.841,
+   "length": 17.644286,
    "voiceDur": 14.994286,
    "cues": [
     {
@@ -219,13 +267,24 @@ window.TIMELINE = {
      "start": 13.363,
      "end": 15.444
     }
-   ]
+   ],
+   "start": 108.991
   },
   {
+   "kind": "card",
+   "id": "c2",
+   "lines": [
+    "और फिर...",
+    "वो हुआ जिसकी",
+    "किसी ने कल्पना भी नहीं की थी"
+   ],
+   "length": 4.2,
+   "start": 126.636
+  },
+  {
+   "kind": "scene",
    "id": 7,
-   "start": 86.836,
-   "length": 12.648,
-   "voice": 87.286,
+   "length": 13.647551,
    "voiceDur": 10.997551,
    "cues": [
     {
@@ -258,13 +317,13 @@ window.TIMELINE = {
      "start": 9.919,
      "end": 11.448
     }
-   ]
+   ],
+   "start": 130.836
   },
   {
+   "kind": "scene",
    "id": 8,
-   "start": 99.483,
-   "length": 13.491,
-   "voice": 99.933,
+   "length": 14.290816,
    "voiceDur": 10.840816,
    "cues": [
     {
@@ -287,7 +346,18 @@ window.TIMELINE = {
      "start": 10.044,
      "end": 11.291
     }
-   ]
+   ],
+   "start": 144.483
+  },
+  {
+   "kind": "card",
+   "id": "end",
+   "lines": [
+    "ऐसी और कथाओं के लिए",
+    "Follow करें"
+   ],
+   "length": 3.8,
+   "start": 158.774
   }
  ]
 };
