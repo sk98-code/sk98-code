@@ -1,0 +1,1143 @@
+<!doctype html><html lang="hi"><head><meta charset="utf-8"><title>Rangeen Jatayu</title><style>html,body{margin:0;height:100%;background:#000;display:flex;align-items:center;justify-content:center}canvas{height:100vh;width:auto}</style></head><body><canvas id="c" width="1080" height="1920"></canvas><script>window.DEFAULT_PAL='youngJ';</script>
+<script>
+/* ===== shapes.js ===== */
+/*
+ * Shared scene for every style: Jatayu x Pushpak Viman.
+ *
+ * Everything here is a pure function of time t (seconds). Styles reuse these
+ * shapes, poses and motion paths and only change the paint (colours, lines,
+ * textures, strike effect), so all ten clips line up frame for frame.
+ *
+ * Canvas: 1080x1920, 30 fps, 5 s (150 frames). Flare at 1.7 s, strike at 2.0 s.
+ */
+(function (global) {
+  'use strict';
+
+  const W = 1080, H = 1920, FPS = 30, DUR = 5, FRAMES = FPS * DUR;
+  const FLARE_T = 1.7, STRIKE_T = 2.0, STRIKE_FRAME = Math.round(STRIKE_T * FPS);
+  const TAU = Math.PI * 2;
+
+  // ---------- maths helpers ----------
+  const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+  const lerp = (a, b, u) => a + (b - a) * u;
+  const smooth = (u) => { u = clamp(u); return u * u * (3 - 2 * u); };
+  const quad = (p0, p1, p2, u) => {
+    const v = 1 - u;
+    return { x: v * v * p0.x + 2 * v * u * p1.x + u * u * p2.x,
+             y: v * v * p0.y + 2 * v * u * p1.y + u * u * p2.y };
+  };
+  const cubic = (p0, p1, p2, p3, u) => {
+    const v = 1 - u;
+    const a = v * v * v, b = 3 * v * v * u, c = 3 * v * u * u, d = u * u * u;
+    return { x: a * p0.x + b * p1.x + c * p2.x + d * p3.x,
+             y: a * p0.y + b * p1.y + c * p2.y + d * p3.y };
+  };
+  /** Deterministic hash -> [0,1). Use instead of Math.random. */
+  function hash(a, b = 0, c = 0) {
+    let h = 0x9e3779b9 ^ Math.imul(a | 0, 374761393) ^ Math.imul(b | 0, 668265263) ^ Math.imul(c | 0, 1274126177);
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    h = Math.imul(h ^ (h >>> 16), 2246822519);
+    h ^= h >>> 15;
+    return (h >>> 0) / 4294967296;
+  }
+
+  /** Thick tapered ribbon along a cubic curve (for necks and curls). */
+  function ribbon(p0, p1, p2, p3, w0, w1, n = 28) {
+    const L = [], R = [];
+    for (let i = 0; i <= n; i++) {
+      const u = i / n;
+      const p = cubic(p0, p1, p2, p3, u);
+      const q = cubic(p0, p1, p2, p3, Math.min(1, u + 0.01));
+      const r = cubic(p0, p1, p2, p3, Math.max(0, u - 0.01));
+      let dx = q.x - r.x, dy = q.y - r.y;
+      const len = Math.hypot(dx, dy) || 1; dx /= len; dy /= len;
+      const w = lerp(w0, w1, u) / 2;
+      L.push({ x: p.x - dy * w, y: p.y + dx * w });
+      R.push({ x: p.x + dy * w, y: p.y - dx * w });
+    }
+    const path = new Path2D();
+    path.moveTo(L[0].x, L[0].y);
+    for (const p of L.slice(1)) path.lineTo(p.x, p.y);
+    for (const p of R.reverse()) path.lineTo(p.x, p.y);
+    path.closePath();
+    return path;
+  }
+
+  function poly(points) {
+    const p = new Path2D();
+    p.moveTo(points[0][0], points[0][1]);
+    for (let i = 1; i < points.length; i++) p.lineTo(points[i][0], points[i][1]);
+    p.closePath();
+    return p;
+  }
+
+  function ellipse(cx, cy, rx, ry, rot = 0) {
+    const p = new Path2D();
+    p.ellipse(cx, cy, rx, ry, rot, 0, TAU);
+    return p;
+  }
+
+  // =====================================================================
+  // PUSHPAK VIMAN  (local coords: origin = keel centre, sails toward +x)
+  // =====================================================================
+  const KALASH_LOCAL = { x: 0, y: -492 };
+
+  function vimanState(t) {
+    let x = lerp(430, 600, t / DUR);
+    let y = 1290 + 8 * Math.sin(TAU * t / 2.5);
+    let rot = 0.015 * Math.sin(TAU * t / 3.1);
+    const s = t - STRIKE_T;
+    if (s > 0) {
+      rot += -0.16 * Math.sin(9 * s) * Math.exp(-3.2 * s);   // lurch: tilts back...
+      y += 50 * (4 * s) * Math.exp(1 - 4 * s);                // ...drops, then recovers
+    }
+    return { x, y, rot, scale: 1 };
+  }
+
+  function localToWorld(st, p) {
+    const c = Math.cos(st.rot), s = Math.sin(st.rot), k = st.scale;
+    return { x: st.x + (p.x * c - p.y * s) * k, y: st.y + (p.x * s + p.y * c) * k };
+  }
+
+  function kalashWorld(t) { return localToWorld(vimanState(t), KALASH_LOCAL); }
+
+  let _vimanStatic = null;
+  function vimanParts(t) {
+    if (!_vimanStatic) {
+      const P = {};
+      const hull = new Path2D();
+      hull.moveTo(-292, -95); hull.lineTo(292, -95);
+      hull.bezierCurveTo(286, -40, 232, 0, 150, 0);
+      hull.lineTo(-150, 0);
+      hull.bezierCurveTo(-232, 0, -286, -40, -292, -95);
+      hull.closePath();
+      P.hull = hull;
+      P.hullBand = poly([[-282, -78], [282, -78], [270, -56], [-270, -56]]);
+      P.hullDots = [];
+      for (let i = -5; i <= 5; i++) P.hullDots.push({ x: i * 46, y: -30, r: 8 });
+
+      // swan-neck prow (right)
+      P.swanNeck = ribbon({ x: 262, y: -88 }, { x: 372, y: -150 }, { x: 248, y: -236 }, { x: 318, y: -300 }, 42, 24);
+      P.swanHead = ellipse(330, -306, 32, 23, -0.15);
+      const beak = new Path2D();
+      beak.moveTo(352, -316); beak.quadraticCurveTo(390, -310, 398, -296);
+      beak.lineTo(352, -296); beak.closePath();
+      P.swanBeak = beak;
+      P.swanEye = { x: 336, y: -312, r: 4.5 };
+
+      // peacock-curl stern (left)
+      P.peacock = ribbon({ x: -268, y: -88 }, { x: -380, y: -120 }, { x: -400, y: -250 }, { x: -312, y: -268 }, 44, 22);
+      P.peacockCurl = ellipse(-300, -258, 30, 30);
+      P.peacockEyes = [
+        { x: -330, y: -150, rx: 14, ry: 19, rot: 0.6 },
+        { x: -352, y: -205, rx: 13, ry: 17, rot: 0.2 },
+        { x: -300, y: -258, rx: 12, ry: 12, rot: 0 },
+      ];
+
+      P.deck = poly([[-252, -112], [252, -112], [262, -95], [-262, -95]]);
+      P.mandapaBack = poly([[-200, -236], [200, -236], [200, -112], [-200, -112]]);
+      P.pillars = [-188, -122, -56, 56, 122, 188].map((x) =>
+        poly([[x - 10, -236], [x + 10, -236], [x + 12, -112], [x - 12, -112]]));
+      P.roof = poly([[-228, -236], [228, -236], [206, -260], [-206, -260]]);
+
+      const tier = (wb, wt, yb, yt) => {
+        const p = new Path2D();
+        p.moveTo(-wb / 2, yb);
+        p.quadraticCurveTo(-wb / 2 + 4, (yb + yt) / 2, -wt / 2, yt);
+        p.lineTo(wt / 2, yt);
+        p.quadraticCurveTo(wb / 2 - 4, (yb + yt) / 2, wb / 2, yb);
+        p.closePath();
+        return p;
+      };
+      P.tiers = [tier(262, 196, -260, -332), tier(204, 140, -332, -398), tier(146, 82, -398, -452)];
+      P.tierLedges = [
+        poly([[-104, -332], [104, -332], [98, -340], [-98, -340]]),
+        poly([[-76, -398], [76, -398], [70, -405], [-70, -405]]),
+      ];
+      P.amalaka = ellipse(0, -460, 50, 13);
+      P.kalashPot = ellipse(0, -490, 23, 21);
+      P.kalashNeck = poly([[-9, -522], [9, -522], [10, -506], [-10, -506]]);
+      P.kalashLip = ellipse(0, -523, 16, 5);
+      P.kalashBud = ellipse(0, -535, 9, 12);
+      P.flagPole = { x0: 0, y0: -546, x1: -12, y1: -652 };
+
+      // --- carved details ---
+      P.capitals = [-188, -122, -56, 56, 122, 188].map((x) => ({
+        top: poly([[x - 17, -236], [x + 17, -236], [x + 13, -226], [x - 13, -226]]),
+        base: poly([[x - 16, -122], [x + 16, -122], [x + 18, -112], [x - 18, -112]]),
+      }));
+      P.lotus = [];
+      for (let x = -240; x <= 240; x += 20) {
+        const q = new Path2D();
+        q.moveTo(x - 9, -112); q.quadraticCurveTo(x - 8, -126, x, -131); q.quadraticCurveTo(x + 8, -126, x + 9, -112); q.closePath();
+        P.lotus.push(q);
+      }
+      P.spires = [-178, 178].map((x) => {
+        const sp = new Path2D();
+        sp.moveTo(x - 30, -260); sp.quadraticCurveTo(x - 28, -295, x - 13, -318);
+        sp.lineTo(x + 13, -318); sp.quadraticCurveTo(x + 28, -295, x + 30, -260); sp.closePath();
+        return { body: sp, cap: ellipse(x, -322, 16, 5), top: ellipse(x, -333, 7, 9) };
+      });
+      const niche = (cx, by, w, h) => {
+        const q = new Path2D();
+        q.moveTo(cx - w / 2, by); q.lineTo(cx - w / 2, by - h * 0.55);
+        q.quadraticCurveTo(cx - w / 2, by - h, cx, by - h * 1.05);
+        q.quadraticCurveTo(cx + w / 2, by - h, cx + w / 2, by - h * 0.55);
+        q.lineTo(cx + w / 2, by); q.closePath();
+        return q;
+      };
+      P.niches = [niche(0, -270, 40, 50), niche(-70, -276, 22, 34), niche(70, -276, 22, 34), niche(0, -342, 30, 40), niche(0, -408, 22, 30)];
+      P.bells = [-155, -89, 0, 89, 155].map((x) => ({ x, y: -228 }));
+      P.garlands = [[-188, -122], [-122, -56], [56, 122], [122, 188]];
+      P.frieze = [];
+      for (let x = -260; x <= 260; x += 26) P.frieze.push(x);
+      _vimanStatic = P;
+    }
+    const P = Object.assign({}, _vimanStatic);
+    // saffron flag streams back (toward stern) and waves
+    const w = Math.sin(TAU * 2.2 * t), w2 = Math.sin(TAU * 2.2 * t + 1.3);
+    const flag = new Path2D();
+    flag.moveTo(-12, -652);
+    flag.quadraticCurveTo(-55, -652 + 10 * w2, -104, -630 + 12 * w);
+    flag.quadraticCurveTo(-55, -618 + 8 * w2, -11, -604);
+    flag.closePath();
+    P.flag = flag;
+    return P;
+  }
+
+  // =====================================================================
+  // JATAYU  (body-local coords: facing +x, origin = body centre;
+  //          drawn mirrored so he faces left)
+  // =====================================================================
+  const JATAYU_SCALE = 1.18;
+
+  /** Pose drivers, all in scene time. */
+  function jatayuPose(t) {
+    let spread, theta, talons, pitch, tailSpread, jaw, grip;
+    if (t < STRIKE_T) {
+      const fl = smooth((t - 1.3) / 0.4);                  // flare complete at 1.7 s
+      spread = lerp(0.1, 1, fl);
+      theta = lerp(3.0, 4.2, fl) + 0.05 * Math.sin(TAU * 7 * t) * (1 - fl);
+      theta += 0.18 * smooth((t - FLARE_T) / 0.3);         // cupping air before the hit
+      talons = smooth((t - 1.42) / 0.38);
+      pitch = lerp(0.8, -0.5, smooth((t - 1.38) / 0.45));
+      tailSpread = lerp(0.2, 1, fl);
+      jaw = smooth((t - 1.6) / 0.25);                      // screech as he strikes
+      grip = 0;
+    } else {
+      const s = t - STRIKE_T;
+      const amp = 0.62 + 0.4 * smooth(s / 0.45);
+      spread = lerp(1, 0.94, smooth(s / 0.3));
+      theta = 4.38 - amp + amp * Math.cos(TAU * 2.8 * s);  // continuous at s = 0
+      talons = 1 - smooth((s - 0.22) / 0.55);
+      pitch = lerp(-0.5, -0.82, smooth(s / 0.35));
+      pitch = lerp(pitch, -0.5, smooth((s - 0.8) / 0.8));
+      tailSpread = lerp(1, 0.45, smooth((s - 0.2) / 0.6));
+      jaw = 1 - smooth((s - 0.35) / 0.35);
+      grip = smooth(s / 0.06) * (1 - smooth((s - 0.45) / 0.35));
+    }
+    return { spread, theta, talons, pitch, tailSpread, jaw, grip };
+  }
+
+  const HIP = { x: 14, y: 30 };
+  function legJoints(talons) {
+    return {
+      knee: { x: lerp(-16, 30, talons), y: lerp(46, 58, talons) },
+      foot: { x: lerp(-54, 78, talons), y: lerp(52, 80, talons) },
+    };
+  }
+  /** The point of the talons that touches the kalash. */
+  function contactLocal(talons) {
+    const f = legJoints(talons).foot;
+    return { x: f.x + 24, y: f.y + 4 };
+  }
+
+  /** Body-local point -> world, for a state {x,y,pitch,scale} (mirrored to face left). */
+  function jatayuToWorld(st, p) {
+    const c = Math.cos(st.pitch), s = Math.sin(st.pitch);
+    const rx = p.x * c - p.y * s, ry = p.x * s + p.y * c;
+    return { x: st.x - rx * st.scale, y: st.y + ry * st.scale };
+  }
+
+  let _target = null;
+  function strikeBodyTarget() {
+    if (!_target) {
+      const K = kalashWorld(STRIKE_T);
+      const pose = jatayuPose(STRIKE_T - 1e-6);
+      const off = jatayuToWorld({ x: 0, y: 0, pitch: pose.pitch, scale: JATAYU_SCALE }, contactLocal(1));
+      _target = { x: K.x - off.x, y: K.y - off.y };
+    }
+    return _target;
+  }
+
+  function jatayuState(t) {
+    const pose = jatayuPose(t);
+    const T = strikeBodyTarget();
+    let p;
+    if (t <= STRIKE_T) {
+      const x = t / STRIKE_T;
+      const u = 0.45 * x + 0.55 * (1 - (1 - x) * (1 - x));
+      p = quad({ x: 1420, y: -340 }, { x: 1120, y: 300 }, T, u);
+    } else {
+      const s = t - STRIKE_T;
+      const v = Math.pow(clamp(s / 2.9), 1.45);
+      p = quad(T, { x: T.x + 170, y: T.y - 520 }, { x: -420, y: -300 }, v);
+      // recoil kick off the spire
+      p.x += 26 * Math.sin(Math.min(s, 0.25) / 0.25 * Math.PI) ;
+      p.y -= 18 * Math.sin(Math.min(s, 0.25) / 0.25 * Math.PI);
+    }
+    return Object.assign({ x: p.x, y: p.y, scale: JATAYU_SCALE }, pose);
+  }
+
+  /** Full skeleton + feather layout for drawing (body-local coords). */
+  function jatayuRig(t) {
+    return rigFromPose(jatayuPose(t), jatayuPose(t - 0.07).theta);
+  }
+
+  /**
+   * Skeleton + feather layout for any pose
+   * {spread, theta, talons, pitch, tailSpread, jaw, grip, wingScale?}.
+   * lagTheta = theta a moment earlier (hand follow-through).
+   */
+  function rigFromPose(p, lagTheta) {
+    const lag = { theta: lagTheta };
+    const ws = p.wingScale ?? 1;
+    const sp = p.spread;
+    const La = lerp(72, 150, sp) * ws, Lh = lerp(84, 190, sp) * ws, chord = lerp(58, 96, sp) * Math.sqrt(ws);
+
+    const wing = (shoulder, dTheta) => {
+      const a1 = p.theta + dTheta;
+      const a2 = lag.theta + dTheta + 0.3 * (1 - sp);
+      const S0 = shoulder;
+      const Wr = { x: S0.x + Math.cos(a1) * La, y: S0.y + Math.sin(a1) * La };
+      const Tip = { x: Wr.x + Math.cos(a2) * Lh, y: Wr.y + Math.sin(a2) * Lh };
+      const fan = lerp(0.28, 1, sp);
+      const prim = [], sec = [], cov = [];
+      for (let i = 0; i < 10; i++) {                     // i = 0 is the outermost primary
+        const k = i / 9;
+        const u = 1 - k;
+        const base = { x: lerp(Wr.x, lerp(Wr.x, Tip.x, 0.55), u), y: lerp(Wr.y, lerp(Wr.y, Tip.y, 0.55), u) };
+        prim.push({ x: base.x, y: base.y, a: a2 - k * (Math.PI / 2 - 0.22) * fan + 0.04 * Math.sin(i * 2.1),
+                    len: lerp(Lh * 0.62, chord * 1.08, k), w: lerp(15, 23, k), finger: i < 4 });
+      }
+      for (let i = 0; i < 10; i++) {
+        const u = (i + 0.5) / 10;
+        const base = { x: lerp(S0.x, Wr.x, u), y: lerp(S0.y, Wr.y, u) };
+        sec.push({ x: base.x, y: base.y, a: a1 - Math.PI / 2 + 0.12 * (u - 0.5) + 0.25 * (lag.theta - p.theta),
+                   len: chord * (0.94 + 0.12 * hash(i, 51)), w: 26 });
+      }
+      for (let i = 0; i < 12; i++) {
+        const u = (i + 0.5) / 12;
+        const onHand = u > 0.75;
+        const A = onHand ? Wr : S0, B = onHand ? Tip : Wr, uu = onHand ? (u - 0.75) / 0.25 * 0.35 : u / 0.75;
+        const ang = onHand ? a2 : a1;
+        cov.push({ x: lerp(A.x, B.x, uu), y: lerp(A.y, B.y, uu), a: ang - Math.PI / 2 + 0.1,
+                   len: chord * 0.6, w: 24 });
+      }
+      return { S: S0, Wr, Tip, a1, a2, La, Lh, chord, prim, sec, cov };
+    };
+
+    const tail = [];
+    for (let k = 0; k < 11; k++) {
+      const u = k / 10 - 0.5;
+      tail.push({ x: -74, y: 2, a: Math.PI + u * lerp(0.35, 1.15, p.tailSpread) - 0.06 + 0.05 * p.pitch,
+                  len: 122 * (1 - 0.18 * Math.abs(u) * 2), w: 17 });
+    }
+
+    const leg = legJoints(p.talons);
+    const neckBase = { x: 62, y: -14 };
+    const nu = -0.5 - 0.5 * p.pitch + (p.neck ?? 0);     // neck lifts the head when diving
+    const head = { x: neckBase.x + Math.cos(nu) * 60, y: neckBase.y + Math.sin(nu) * 60, rot: -0.62 * p.pitch + (p.headRot ?? 0) };
+
+    return {
+      pose: p,
+      far: wing({ x: 42, y: -30 }, -0.3),
+      near: wing({ x: 24, y: -24 }, 0),
+      tail, hip: HIP, knee: leg.knee, foot: leg.foot,
+      neckBase, head,
+    };
+  }
+
+  /** Asymmetric feather vane along +x (length len, width w). */
+  function featherShape(len, w, finger) {
+    const p = new Path2D();
+    const tipW = finger ? 0.18 : 0.35;
+    p.moveTo(0, 0);
+    p.bezierCurveTo(len * 0.2, -w * 0.62, len * 0.75, -w * 0.58, len, -w * tipW * 0.6);
+    p.quadraticCurveTo(len * 1.03, 0, len * 0.96, w * tipW);
+    p.bezierCurveTo(len * 0.75, w * 0.55, len * 0.25, w * 0.5, 0, 0);
+    p.closePath();
+    return p;
+  }
+
+  let _head = null;
+  /** Head parts in head-local coords (origin = top of neck, facing +x). */
+  function headParts() {
+    if (!_head) {
+      const H = {};
+      H.skull = ellipse(10, -6, 30, 22, -0.08);
+      const up = new Path2D();
+      up.moveTo(26, -17); up.quadraticCurveTo(58, -21, 66, -2);
+      up.quadraticCurveTo(68, 9, 58, 10); up.lineTo(56, 3); up.lineTo(27, 4); up.closePath();
+      H.upper = up;
+      H.hook = poly([[56, -6], [66, -2], [67, 6], [58, 10], [56, 3]]);
+      const lo = new Path2D();
+      lo.moveTo(28, 4); lo.lineTo(55, 4); lo.quadraticCurveTo(50, 13, 30, 12); lo.closePath();
+      H.lower = lo;
+      H.mouth = poly([[28, 3], [56, 3], [30, 14]]);
+      H.nostril = ellipse(43, -7, 5.5, 2.2, -0.15);
+      H.cere = [33, -16, 31, 4];
+      H.eye = { x: 15, y: -11, r: 7.5 };
+      H.brow = poly([[0, -20], [28, -24], [26, -15], [12, -14], [2, -15]]);
+      H.wrinkles = [[-10, -14, -4, -2], [-15, -8, -9, 4], [-4, 4, 8, 8], [0, 9, 14, 11]];
+      H.ear = ellipse(-5, -2, 3.5, 4.5);
+      _head = H;
+    }
+    return _head;
+  }
+
+  /** Fluffy scalloped ruff ring around a centre. */
+  function ruffPath(cx, cy, r0, r1, lobes, squash, seed) {
+    const p = new Path2D();
+    for (let i = 0; i <= lobes; i++) {
+      const a = (i / lobes) * TAU;
+      const r = r0 + (r1 - r0) * (0.6 + 0.4 * hash(i % lobes, seed));
+      const x = cx + Math.cos(a) * r0, y = cy + Math.sin(a) * r0 * squash;
+      if (i === 0) { p.moveTo(x, y); continue; }
+      const am = a - Math.PI / lobes;
+      p.quadraticCurveTo(cx + Math.cos(am) * r * 1.18, cy + Math.sin(am) * r * 1.18 * squash, x, y);
+    }
+    p.closePath();
+    return p;
+  }
+
+  // =====================================================================
+  // SMALL BIRDS, FEATHERS, CLOUDS
+  // =====================================================================
+  const NBIRDS = 14;
+  function birdsState(t) {
+    const K = kalashWorld(STRIKE_T);
+    const out = [];
+    for (let i = 0; i < NBIRDS; i++) {
+      const ox = (hash(i, 1) - 0.5) * 300, oy = (hash(i, 2) - 0.5) * 200;
+      const bx = 250 + ox + 34 * t, by = 640 + oy + 10 * Math.sin(TAU * (0.3 * t + hash(i, 3)));
+      let x = bx, y = by, dir = 1;
+      let flapHz = 3.2 + hash(i, 4);
+      const s = t - STRIKE_T - 0.05 * hash(i, 5);
+      if (s > 0) {
+        const b0 = { x: 250 + ox + 34 * STRIKE_T, y: 640 + oy };
+        let dx = b0.x - K.x, dy = b0.y - K.y - 120;
+        const len = Math.hypot(dx, dy) || 1; dx /= len; dy /= len;
+        const v = 260 + 300 * hash(i, 6);
+        const d = v * s + 180 * s * s;
+        x = bx + dx * d; y = by + dy * d;
+        dir = dx < 0 ? -1 : 1;
+        flapHz = 7 + 2 * hash(i, 7);
+      }
+      const flap = Math.sin(TAU * (flapHz * t + hash(i, 8)));
+      out.push({ x, y, dir, flap, size: 22 + 10 * hash(i, 9) });
+    }
+    return out;
+  }
+
+  /** Small bird ("M" shape) centred at 0,0 facing +x; flap in [-1,1]. */
+  function birdPath(size, flap) {
+    const p = new Path2D();
+    const wy = -size * 0.55 * flap;
+    p.moveTo(-size, wy);
+    p.quadraticCurveTo(-size * 0.45, wy * 0.2 - size * 0.15, 0, 0);
+    p.quadraticCurveTo(size * 0.45, wy * 0.2 - size * 0.15, size, wy);
+    p.quadraticCurveTo(size * 0.45, wy * 0.1 + size * 0.05, size * 0.15, size * 0.18);
+    p.lineTo(size * 0.35, size * 0.12);
+    p.lineTo(size * 0.12, size * 0.28);
+    p.lineTo(-size * 0.25, size * 0.2);
+    p.quadraticCurveTo(-size * 0.45, wy * 0.1 + size * 0.05, -size, wy);
+    p.closePath();
+    return p;
+  }
+
+  const NFEATHERS = 30;
+  function feathersState(t) {
+    const s = t - STRIKE_T;
+    if (s <= 0) return [];
+    const K = kalashWorld(STRIKE_T);
+    const out = [];
+    for (let i = 0; i < NFEATHERS; i++) {
+      const a = -Math.PI * 0.95 + hash(i, 11) * Math.PI * 1.5;   // mostly up/sideways
+      const v = 320 + 520 * hash(i, 12);
+      const drag = 2.6;
+      const r = v * (1 - Math.exp(-drag * s)) / drag;
+      const x = K.x + Math.cos(a) * r + 26 * Math.sin(3 * s + hash(i, 13) * 6) * s;
+      const y = K.y + Math.sin(a) * r + 70 * s * s;
+      const rot = hash(i, 14) * TAU + (hash(i, 15) - 0.5) * 9 * s;
+      const alpha = 1 - smooth((s - 1.6) / 1.1);
+      out.push({ x, y, rot, alpha, size: 0.6 + 0.7 * hash(i, 16), light: hash(i, 17) < 0.3 });
+    }
+    return out;
+  }
+
+  /** Feather leaf centred at 0,0 along +x. */
+  function featherPath(size) {
+    const L = 46 * size, w = 11 * size;
+    const p = new Path2D();
+    p.moveTo(-L / 2, 0);
+    p.quadraticCurveTo(0, -w, L / 2, 0);
+    p.quadraticCurveTo(0, w, -L / 2, 0);
+    p.closePath();
+    return p;
+  }
+
+  /** Union of circles as one path (nonzero fill = union). */
+  function puffs(circles) {
+    const p = new Path2D();
+    for (const c of circles) { p.moveTo(c.x + c.r, c.y); p.arc(c.x, c.y, c.r, 0, TAU); }
+    return p;
+  }
+
+  /** Cloud-sea band: puffs scrolling left (the viman sails right). */
+  function cloudBand(t, layer, baseY, radius, spacing, speed) {
+    const span = W + spacing * 3;
+    const circles = [];
+    const n = Math.ceil(span / spacing) + 1;
+    for (let j = 0; j < n; j++) {
+      const raw = j * spacing - speed * t;
+      const x = ((raw % span) + span) % span - spacing * 1.5;
+      const idx = Math.floor((j * spacing - speed * t - x) / span); // which wrap
+      const k = j + idx * 1000;
+      const r = radius * (0.75 + 0.5 * hash(k, layer, 21));
+      circles.push({ x, y: baseY - r * 0.35 + 30 * hash(k, layer, 22), r });
+    }
+    const p = puffs(circles);
+    p.rect(-50, baseY, W + 100, H - baseY + 50);
+    return p;
+  }
+
+  /** A towering cumulus made of stacked puffs, drifting slowly. */
+  function cumulus(cx, cy, size, seed) {
+    const circles = [
+      { x: cx, y: cy - size * 0.55, r: size * 0.8 },
+      { x: cx - size * 0.6, y: cy - size * 0.1, r: size * 0.6 },
+      { x: cx + size * 0.6, y: cy - size * 0.1, r: size * 0.6 },
+    ];
+    const n = 15;
+    for (let i = 0; i < n; i++) {               // bumpy dome outline
+      const a = Math.PI * (i / (n - 1));
+      const r = size * (0.24 + 0.16 * hash(seed, i, 1));
+      circles.push({ x: cx + Math.cos(a) * size * 1.08, y: cy + size * 0.05 - Math.sin(a) * size * 1.38, r });
+    }
+    for (let i = 0; i < 6; i++) {               // flat-ish base
+      circles.push({ x: cx + (i / 5 - 0.5) * size * 2.2, y: cy + size * 0.12, r: size * (0.3 + 0.08 * hash(seed, i, 2)) });
+    }
+    return puffs(circles);
+  }
+
+
+  /** Swing angle (radians, relative to world vertical) of hanging bell i. */
+  function bellSwing(t, i) {
+    const s = t - STRIKE_T;
+    let a = 0.06 * Math.sin(TAU * 0.8 * t + i * 1.3);
+    if (s > 0) a += 0.55 * Math.exp(-1.7 * s) * Math.sin(8.5 * s + i * 0.6);
+    return a;
+  }
+
+  // ---------- cinematic time: fast dive, slow-motion flare, hit-stop ----------
+  // Output time t -> scene time. Fixed so scene(2.0) == 2.0 and scene(5.0) == 5.0,
+  // which keeps the strike on frame 60 for the reel.
+  const _remap = (() => {
+    const speed = (t) => {
+      if (t < STRIKE_T) return lerp(1.08, 0.5, smooth((t - 1.4) / 0.45));
+      return lerp(0.12, 1.12, smooth((t - 2.08) / 0.55));
+    };
+    const N = 2000, tab = new Float64Array(N + 1);
+    let acc = 0, accStrike = 0;
+    const dt = DUR / N;
+    for (let i = 0; i < N; i++) {
+      tab[i] = acc;
+      const tm = (i + 0.5) * dt;
+      acc += speed(tm) * dt;
+      if (Math.abs((i + 1) * dt - STRIKE_T) < 1e-9) accStrike = acc;
+    }
+    tab[N] = acc;
+    // normalise pre- and post-strike segments independently
+    const iS = Math.round(STRIKE_T / dt);
+    const pre = tab[iS], post = tab[N] - tab[iS];
+    for (let i = 0; i <= N; i++) {
+      tab[i] = i <= iS ? tab[i] / pre * STRIKE_T : STRIKE_T + (tab[i] - pre) / post * (DUR - STRIKE_T);
+    }
+    return { tab, dt, N };
+  })();
+  function sceneTime(t) {
+    const x = clamp(t / _remap.dt, 0, _remap.N);
+    const i = Math.min(_remap.N - 1, Math.floor(x));
+    return lerp(_remap.tab[i], _remap.tab[i + 1], x - i);
+  }
+
+  // ---------- camera (output time) ----------
+  const CAM_KEYS = [
+    [0.0, 1.0, 540, 960, 0],
+    [1.3, 1.08, 565, 885, -0.02],
+    [1.95, 1.3, 540, 800, -0.035],
+    [2.05, 1.46, 520, 785, 0.012],
+    [2.7, 1.27, 520, 800, 0],
+    [5.0, 1.12, 540, 860, 0],
+  ];
+  function camera(t) {
+    let k = 0;
+    while (k < CAM_KEYS.length - 2 && t > CAM_KEYS[k + 1][0]) k++;
+    const A = CAM_KEYS[k], B = CAM_KEYS[k + 1];
+    const u = smooth((t - A[0]) / (B[0] - A[0]));
+    const cam = { z: lerp(A[1], B[1], u), fx: lerp(A[2], B[2], u), fy: lerp(A[3], B[3], u), rot: lerp(A[4], B[4], u), sx: 0, sy: 0 };
+    const s = t - STRIKE_T;
+    if (s >= 0 && s < 0.7) {                            // impact shake, seeded by frame
+      const f = Math.round(t * FPS), k2 = 26 * Math.exp(-5.5 * s);
+      cam.sx = (hash(f, 41) - 0.5) * 2 * k2; cam.sy = (hash(f, 42) - 0.5) * 2 * k2;
+    }
+    return cam;
+  }
+  /** Apply the camera; depth 1 = full camera (subject plane), 0 = locked to screen. */
+  function applyCamera(c, cam, depth = 1) {
+    const z = 1 + (cam.z - 1) * depth;
+    const fx = 540 + (cam.fx - 540) * depth, fy = 960 + (cam.fy - 960) * depth;
+    c.translate(W / 2 + cam.sx * depth, H / 2 + cam.sy * depth);
+    c.rotate(cam.rot * depth);
+    c.scale(z, z);
+    c.translate(-fx, -fy);
+  }
+
+  global.Shapes = {
+    W, H, FPS, DUR, FRAMES, FLARE_T, STRIKE_T, STRIKE_FRAME, TAU,
+    clamp, lerp, smooth, hash, quad, cubic, ribbon, poly, ellipse, puffs,
+    vimanState, vimanParts, localToWorld, kalashWorld, KALASH_LOCAL,
+    jatayuState, jatayuPose, jatayuRig, rigFromPose, jatayuToWorld, contactLocal, featherShape, headParts, ruffPath,
+    bellSwing, sceneTime, camera, applyCamera,
+    birdsState, birdPath, feathersState, featherPath, cloudBand, cumulus,
+  };
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+/* ===== anime-kit.js ===== */
+/*
+ * Anime paint kit shared by anims/anime.html and story/story.html:
+ * three-tone cel shading, viman, bird (Jatayu / Sampati) drawing, effects.
+ */
+(function (global) {
+  'use strict';
+  const S = global.Shapes;
+  const { TAU, clamp, lerp, smooth, hash } = S;
+  const INK = '#1a1222';
+  // [rim light, base, shadow, (detail)]
+  const P = {
+    gold: ['#fff4c6', '#ffc83a', '#c97b13', '#8a4f08'],
+    goldDeep: ['#ffe28e', '#eaa52a', '#a8620e'],
+    red: ['#ff7a7a', '#d9263a', '#8c1124'],
+    maroon: ['#a7303f', '#6c1024', '#3f0718'],
+    saffron: ['#ffc477', '#ff7a14', '#c64a06'],
+    teal: ['#7cf0e4', '#14a7a0', '#0b5f78'],
+    leaf: ['#b6f08a', '#5bbd3a', '#2c7a20'],
+    feather: ['#9a7656', '#4e3628', '#291a12', '#d8c3a4'],
+    featherFar: ['#664b38', '#36251b', '#1c110b', '#8c775f'],
+    covert: ['#b38d66', '#6d4d37', '#3d291c', '#e6d3b6'],
+    body: ['#8c6a4e', '#4a3326', '#26180f'],
+    skin: ['#ffd6da', '#f29ba8', '#c45c71'],
+    ruff: ['#ffffff', '#f2efe8', '#c3c6d6'],
+    beak: ['#fff7da', '#e9d9ab', '#ad945c'],
+    leg: ['#efe3c4', '#c2b086', '#86744d'],
+    claw: ['#7a7480', '#2a2530', '#0d0b10'],
+    cloud: ['#fffdf3', '#f2f6ff', '#b3c8ec'],
+  };
+  // direction toward the sun (world space, upper right)
+  const LW = (() => { const x = 0.56, y = -0.83, l = Math.hypot(x, y); return { x: x / l, y: y / l }; })();
+  const rot = (v, a) => ({ x: v.x * Math.cos(a) - v.y * Math.sin(a), y: v.x * Math.sin(a) + v.y * Math.cos(a) });
+
+  /**
+   * Three-tone cel fill. L = unit vector toward the light in the current local coords.
+   * a = shadow depth, b = rim-light width, lw = ink width.
+   */
+  // Render modes: 'cel' (default anime), 'real' (soft painted, no ink lines),
+  // 'sil' (backlit silhouette: dark body with a rim of light on the lit edge).
+  let MODE = 'cel', SIL = { dark: '#120a10', rim: 'rgba(255,200,120,1)', w: 3.5 };
+  function setMode(m, opt) { MODE = m; if (opt) SIL = Object.assign({}, SIL, opt); }
+  const mixC = (a, b, u) => {
+    const h = (x) => [1, 3, 5].map((i) => parseInt(x.slice(i, i + 2), 16));
+    if (a[0] !== '#' || b[0] !== '#') return a;
+    const A = h(a), B = h(b);
+    return '#' + A.map((v, i) => Math.round(v + (B[i] - v) * u).toString(16).padStart(2, '0')).join('');
+  };
+  function cel3(c, path, pal, L, a = 6, b = 3, lw = 0) {
+    if (MODE === 'sil') {
+      c.save(); c.clip(path);
+      c.fillStyle = SIL.rim; c.fillRect(-1e4, -1e4, 2e4, 2e4);
+      c.translate(-L.x * SIL.w, -L.y * SIL.w); c.fillStyle = SIL.dark; c.fill(path);
+      c.restore();
+      return;
+    }
+    if (MODE === 'real') {                         // soft two-tone, no outline
+      c.save(); c.clip(path);
+      c.fillStyle = mixC(pal[2], pal[1], 0.35); c.fillRect(-1e4, -1e4, 2e4, 2e4);
+      c.translate(L.x * a * 1.4, L.y * a * 1.4); c.fillStyle = pal[1]; c.fill(path);
+      c.translate(L.x * a * 0.8, L.y * a * 0.8); c.globalAlpha *= 0.35; c.fillStyle = pal[0]; c.fill(path);
+      c.restore();
+      return;
+    }
+    // shadow everywhere; rim = (path shifted toward light) minus (path shifted away);
+    // base = intersection of both. Built from nested clips, so unions of puffs work.
+    c.save();
+    c.clip(path);
+    c.fillStyle = pal[2]; c.fillRect(-1e4, -1e4, 2e4, 2e4);
+    c.translate(L.x * a, L.y * a); c.clip(path); c.translate(-L.x * a, -L.y * a);
+    if (b > 0) {
+      c.fillStyle = pal[0]; c.fillRect(-1e4, -1e4, 2e4, 2e4);
+      c.translate(-L.x * b, -L.y * b); c.clip(path); c.translate(L.x * b, L.y * b);
+    }
+    c.fillStyle = pal[1]; c.fillRect(-1e4, -1e4, 2e4, 2e4);
+    c.restore();
+    if (lw) { c.lineWidth = lw; c.strokeStyle = INK; c.lineJoin = 'round'; c.lineCap = 'round'; c.stroke(path); }
+  }
+
+  function bell(c, L) {
+    c.strokeStyle = INK; c.lineWidth = 2.5; c.beginPath(); c.moveTo(0, 0); c.lineTo(0, 16); c.stroke();
+    const b = new Path2D();
+    b.moveTo(-5, 16); b.quadraticCurveTo(-7, 24, -11, 32); b.lineTo(11, 32); b.quadraticCurveTo(7, 24, 5, 16); b.closePath();
+    cel3(c, b, P.gold, L, 3, 2, 2.5);
+    c.fillStyle = INK; c.beginPath(); c.arc(0, 34, 3, 0, TAU); c.fill();
+  }
+
+  function viman(c, tau, st = S.vimanState(tau), opt = {}) {
+    const V = S.vimanParts(tau);
+    c.save();
+    c.translate(st.x, st.y); c.rotate(st.rot);
+    const L = rot(LW, -st.rot);
+    const lw = 5;
+
+    // flag
+    const fp = V.flagPole;
+    c.lineCap = 'round';
+    c.strokeStyle = INK; c.lineWidth = 10; c.beginPath(); c.moveTo(fp.x0, fp.y0); c.lineTo(fp.x1, fp.y1); c.stroke();
+    c.strokeStyle = P.gold[1]; c.lineWidth = 4.5; c.beginPath(); c.moveTo(fp.x0, fp.y0); c.lineTo(fp.x1, fp.y1); c.stroke();
+    cel3(c, V.flag, P.saffron, L, 6, 3, 4.5);
+    c.fillStyle = P.gold[1]; c.strokeStyle = INK; c.lineWidth = 3;
+    c.beginPath(); c.arc(fp.x1, fp.y1 - 4, 6, 0, TAU); c.fill(); c.stroke();
+
+    // stern (peacock) and prow (swan)
+    cel3(c, V.peacock, P.gold, L, 9, 4, lw);
+    cel3(c, V.peacockCurl, P.gold, L, 6, 3, lw);
+    for (const e of V.peacockEyes) {
+      cel3(c, S.ellipse(e.x, e.y, e.rx, e.ry, e.rot), P.teal, L, 3, 2, 3);
+      c.fillStyle = '#0a2768'; c.beginPath(); c.ellipse(e.x, e.y + 2, e.rx * 0.42, e.ry * 0.42, e.rot, 0, TAU); c.fill();
+      c.fillStyle = '#fff'; c.beginPath(); c.arc(e.x - 2, e.y - 3, 2, 0, TAU); c.fill();
+    }
+    cel3(c, V.swanNeck, P.gold, L, 9, 4, lw);
+    cel3(c, V.swanBeak, P.saffron, L, 3, 2, 4);
+    cel3(c, V.swanHead, P.gold, L, 6, 3, lw);
+    c.fillStyle = INK; c.beginPath(); c.arc(V.swanEye.x, V.swanEye.y, V.swanEye.r, 0, TAU); c.fill();
+    c.fillStyle = '#fff'; c.beginPath(); c.arc(V.swanEye.x - 1, V.swanEye.y - 1.5, 1.5, 0, TAU); c.fill();
+
+    // pavilion interior with warm lamp glow
+    cel3(c, V.mandapaBack, P.maroon, L, 10, 0, lw);
+    c.save(); c.clip(V.mandapaBack);
+    const lamp = c.createRadialGradient(0, -150, 5, 0, -150, 150);
+    const flick = 0.75 + 0.25 * Math.sin(TAU * 3.1 * tau) * Math.sin(TAU * 1.7 * tau + 1);
+    lamp.addColorStop(0, `rgba(255,190,90,${0.75 * flick})`); lamp.addColorStop(1, 'rgba(255,120,40,0)');
+    c.fillStyle = lamp; c.fillRect(-200, -240, 400, 130);
+    c.restore();
+    if (opt.inPavilion) opt.inPavilion(c, L);
+    for (const p of V.pillars) cel3(c, p, P.gold, L, 6, 3, 4);
+    for (const cap of V.capitals) { cel3(c, cap.top, P.goldDeep, L, 3, 2, 3); cel3(c, cap.base, P.goldDeep, L, 3, 2, 3); }
+
+    // garlands (marigold torans) and bells sway with the lurch
+    V.garlands.forEach(([x1, x2], i) => {
+      const sw = S.bellSwing(tau, i + 7);
+      const cx = (x1 + x2) / 2 + 26 * Math.sin(sw - st.rot), cy = -226 + 34;
+      c.strokeStyle = '#2f6b1f'; c.lineWidth = 4;
+      c.beginPath(); c.moveTo(x1 + 12, -226); c.quadraticCurveTo(cx, cy, x2 - 12, -226); c.stroke();
+      for (let k = 1; k < 8; k++) {
+        const u = k / 8, v = 1 - u;
+        const px = v * v * (x1 + 12) + 2 * v * u * cx + u * u * (x2 - 12);
+        const py = v * v * -226 + 2 * v * u * cy + u * u * -226;
+        c.fillStyle = k % 2 ? '#ff8c1a' : '#ffc928'; c.strokeStyle = INK; c.lineWidth = 2;
+        c.beginPath(); c.arc(px, py, 5.5, 0, TAU); c.fill(); c.stroke();
+      }
+    });
+    V.bells.forEach((b, i) => {
+      c.save(); c.translate(b.x, b.y);
+      const a = S.bellSwing(tau, i) - st.rot;
+      c.rotate(a); bell(c, rot(L, -a)); c.restore();
+    });
+
+    // deck + lotus petals
+    cel3(c, V.deck, P.gold, L, 5, 3, lw);
+    for (const q of V.lotus) cel3(c, q, P.goldDeep, L, 3, 2, 2.5);
+
+    // hull
+    cel3(c, V.hull, P.gold, L, 16, 5, lw);
+    cel3(c, V.hullBand, P.red, L, 5, 2, 4);
+    c.save(); c.clip(V.hull);
+    c.strokeStyle = P.gold[3]; c.lineWidth = 2.5;
+    for (const x of V.frieze) {                      // small carved arches under the band
+      c.beginPath(); c.moveTo(x - 10, -18); c.quadraticCurveTo(x, -44, x + 10, -18); c.stroke();
+    }
+    c.restore();
+    for (const d of V.hullDots) {
+      c.fillStyle = P.red[1]; c.strokeStyle = INK; c.lineWidth = 2.5;
+      c.beginPath(); c.arc(d.x, d.y - 37, 6, 0, TAU); c.fill(); c.stroke();
+      c.fillStyle = P.gold[0]; c.beginPath(); c.arc(d.x - 1.5, d.y - 39, 2, 0, TAU); c.fill();
+    }
+
+    // shikhara
+    cel3(c, V.roof, P.gold, L, 7, 3, lw);
+    for (const sp of V.spires) {
+      cel3(c, sp.body, P.gold, L, 6, 3, 4);
+      cel3(c, sp.cap, P.goldDeep, L, 2, 2, 3);
+      cel3(c, sp.top, P.gold, L, 3, 2, 3);
+    }
+    V.tiers.forEach((p, i) => {
+      cel3(c, p, P.gold, L, 14 - 3 * i, 4, 0);
+      c.save(); c.clip(p);
+      c.strokeStyle = 'rgba(140,70,8,0.55)'; c.lineWidth = 2.5;
+      for (let k = -4; k <= 4; k++) { c.beginPath(); c.moveTo(k * (30 - 6 * i), -260); c.lineTo(k * (20 - 4 * i), -460); c.stroke(); }
+      c.strokeStyle = 'rgba(140,70,8,0.4)'; c.lineWidth = 2;
+      for (let yy = -270 - 66 * i; yy > -332 - 66 * i; yy -= 12) { c.beginPath(); c.moveTo(-150, yy); c.lineTo(150, yy); c.stroke(); }
+      c.restore();
+      c.lineWidth = lw; c.strokeStyle = INK; c.stroke(p);
+    });
+    for (const q of V.niches) {
+      cel3(c, q, P.maroon, L, 4, 0, 3);
+      c.save(); c.clip(q);
+      c.fillStyle = `rgba(255,170,70,${0.35 * flick})`; c.fill(q);
+      c.restore();
+    }
+    for (const p of V.tierLedges) cel3(c, p, P.red, L, 3, 2, 3.5);
+    cel3(c, V.amalaka, P.goldDeep, L, 4, 3, 4);
+    c.save(); c.clip(V.amalaka); c.strokeStyle = P.gold[3]; c.lineWidth = 2;
+    for (let x = -45; x <= 45; x += 9) { c.beginPath(); c.moveTo(x, -473); c.lineTo(x * 0.9, -447); c.stroke(); }
+    c.restore();
+    cel3(c, V.kalashNeck, P.gold, L, 3, 2, 3.5);
+    cel3(c, V.kalashPot, P.gold, L, 7, 4, 4.5);
+    c.strokeStyle = P.red[1]; c.lineWidth = 3; c.beginPath(); c.ellipse(0, -490, 22, 5, 0, 0, Math.PI); c.stroke();
+    cel3(c, V.kalashLip, P.gold, L, 2, 2, 3.5);
+    cel3(c, V.kalashBud, P.leaf, L, 3, 2, 3.5);
+    c.restore();
+  }
+
+  // =================================================================
+  // JATAYU
+  // =================================================================
+  function feather(c, fe, pal, Lb, lw = 2, rachis = true) {
+    c.save();
+    c.translate(fe.x, fe.y); c.rotate(fe.a);
+    const p = S.featherShape(fe.len, fe.w, fe.finger);
+    cel3(c, p, pal, rot(Lb, -fe.a), 3.5, 2.2, lw);
+    if (rachis && pal[3]) {
+      c.strokeStyle = pal[3]; c.globalAlpha *= 0.7; c.lineWidth = 1.4;
+      c.beginPath(); c.moveTo(3, 0); c.lineTo(fe.len * 0.9, -fe.w * 0.05); c.stroke();
+    }
+    c.restore();
+  }
+
+  function wing(c, w, Lb, far, Pb = P) {
+    const palP = far ? Pb.featherFar : Pb.feather;
+    const palC = far ? Pb.featherFar : Pb.covert;
+    for (let i = w.prim.length - 1; i >= 0; i--) feather(c, w.prim[i], palP, Lb);
+    for (const fe of w.sec) feather(c, fe, palP, Lb);
+    for (const fe of w.cov) feather(c, fe, palC, Lb, 1.8, false);
+    // marginal (leading-edge) coverts band, bowed forward like a real wing
+    const hand = { x: lerp(w.Wr.x, w.Tip.x, 0.3), y: lerp(w.Wr.y, w.Tip.y, 0.3) };
+    const lead = { x: Math.cos(w.a1 + Math.PI / 2) * 12, y: Math.sin(w.a1 + Math.PI / 2) * 12 };
+    const m1 = { x: lerp(w.S.x, w.Wr.x, 0.35) + lead.x, y: lerp(w.S.y, w.Wr.y, 0.35) + lead.y };
+    const m2 = { x: lerp(w.S.x, w.Wr.x, 0.8) + lead.x * 1.2, y: lerp(w.S.y, w.Wr.y, 0.8) + lead.y * 1.2 };
+    const band = S.ribbon(w.S, m1, m2, hand, 46, 20);
+    cel3(c, band, far ? Pb.featherFar : Pb.covert, Lb, 4, 3, 3);
+    c.save(); c.clip(band);
+    c.strokeStyle = far ? 'rgba(0,0,0,0.25)' : 'rgba(40,20,10,0.35)'; c.lineWidth = 1.5;
+    for (let k = 1; k < 9; k++) {
+      const u = k / 9, px = lerp(w.S.x, hand.x, u), py = lerp(w.S.y, hand.y, u);
+      c.beginPath(); c.arc(px, py, 9, 0, Math.PI); c.stroke();
+    }
+    c.restore();
+  }
+
+  function legDraw(c, R, Lb, far, Pb = P) {
+    const { hip, knee, foot } = R, g = R.pose.grip;
+    const dx = far ? 10 : 0, dy = far ? -6 : 0;
+    c.save(); c.translate(dx, dy);
+    const d = Math.atan2(foot.y - knee.y, foot.x - knee.x);
+    // tarsus
+    c.lineCap = 'round';
+    c.strokeStyle = INK; c.lineWidth = 17; c.beginPath(); c.moveTo(knee.x, knee.y); c.lineTo(foot.x, foot.y); c.stroke();
+    c.strokeStyle = far ? P.leg[2] : P.leg[1]; c.lineWidth = 10; c.beginPath(); c.moveTo(knee.x, knee.y); c.lineTo(foot.x, foot.y); c.stroke();
+    c.strokeStyle = far ? '#5e5036' : P.leg[2]; c.lineWidth = 1.5;
+    for (let k = 1; k < 6; k++) {                    // scutes
+      const u = 0.25 + k * 0.12, px = lerp(knee.x, foot.x, u), py = lerp(knee.y, foot.y, u);
+      const nx = -Math.sin(d) * 4.5, ny = Math.cos(d) * 4.5;
+      c.beginPath(); c.moveTo(px - nx, py - ny); c.lineTo(px + nx, py + ny); c.stroke();
+    }
+    // toes: three forward, hallux back
+    const toe = (a, l1, l2, curl) => {
+      const x1 = foot.x + Math.cos(a) * l1, y1 = foot.y + Math.sin(a) * l1;
+      const a2 = a + curl, x2 = x1 + Math.cos(a2) * l2, y2 = y1 + Math.sin(a2) * l2;
+      c.strokeStyle = INK; c.lineWidth = 11;
+      c.beginPath(); c.moveTo(foot.x, foot.y); c.lineTo(x1, y1); c.lineTo(x2, y2); c.stroke();
+      c.strokeStyle = far ? P.leg[2] : P.leg[1]; c.lineWidth = 6;
+      c.beginPath(); c.moveTo(foot.x, foot.y); c.lineTo(x1, y1); c.lineTo(x2, y2); c.stroke();
+      // claw
+      const a3 = a2 + 0.5 + 0.6 * curl;
+      c.save(); c.translate(x2, y2); c.rotate(a3);
+      const cl = new Path2D();
+      cl.moveTo(0, -4); cl.quadraticCurveTo(12, -5, 16, 6); cl.quadraticCurveTo(9, 1, 0, 4); cl.closePath();
+      cel3(c, cl, P.claw, rot(Lb, -a3), 2, 1.5, 2);
+      c.restore();
+    };
+    const spreadT = 1 - 0.45 * g, curl = 0.25 + 0.95 * g;
+    toe(d + Math.PI - 0.5, 12, 9, -curl * 0.7);
+    for (const o of [-0.55, -0.05, 0.45]) toe(d + o * spreadT, 17, 14, curl);
+    c.restore();
+    // feathered "trousers"
+    const th = S.ruffPath(hip.x + 6 + dx, hip.y + 8 + dy, 24, 30, 9, 0.85, far ? 79 : 77);
+    cel3(c, th, far ? Pb.featherFar : Pb.body, Lb, 5, 3, 3.5);
+  }
+
+  function head(c, R, Lb, Pb = P, opt = {}) {
+    const hd = R.head, Hp = S.headParts(), jaw = R.pose.jaw;
+    c.save(); c.translate(hd.x, hd.y); c.rotate(hd.rot);
+    const L = rot(Lb, -hd.rot);
+    // open beak: mouth interior and lower mandible
+    if (jaw > 0.02) {
+      c.save(); c.translate(28, 4); c.rotate(jaw * 0.5); c.translate(-28, -4);
+      c.fillStyle = '#7a0f22'; c.fill(Hp.mouth);
+      c.fillStyle = '#e8566c'; c.beginPath(); c.ellipse(36, 8, 7, 3, 0.3, 0, TAU); c.fill(); // tongue
+      cel3(c, Hp.lower, P.beak, L, 3, 2, 3);
+      c.restore();
+    } else {
+      cel3(c, Hp.lower, P.beak, L, 3, 2, 3);
+    }
+    cel3(c, Hp.skull, Pb.skin, L, 6, 3, 3.8);
+    c.strokeStyle = P.skin[2]; c.lineWidth = 1.8; c.lineCap = 'round';
+    for (const w of Hp.wrinkles) { c.beginPath(); c.moveTo(w[0], w[1]); c.quadraticCurveTo((w[0] + w[2]) / 2 + 3, (w[1] + w[3]) / 2, w[2], w[3]); c.stroke(); }
+    c.fillStyle = '#7a2a3a'; c.fill(Hp.ear);
+    cel3(c, Hp.upper, P.beak, L, 3, 2, 3.5);
+    c.fillStyle = '#2b2226'; c.fill(Hp.hook);
+    c.strokeStyle = INK; c.lineWidth = 3.5; c.stroke(Hp.hook);
+    c.fillStyle = '#3a2c2a'; c.fill(Hp.nostril);
+    c.strokeStyle = P.beak[2]; c.lineWidth = 2;
+    c.beginPath(); c.moveTo(Hp.cere[0], Hp.cere[1]); c.quadraticCurveTo(Hp.cere[0] - 4, -6, Hp.cere[2], Hp.cere[3]); c.stroke();
+    // eye: amber iris, pupil, two highlights
+    const e = Hp.eye;
+    if (opt.eyeClosed) {
+      c.strokeStyle = INK; c.lineWidth = 3.5; c.lineCap = 'round';
+      c.beginPath(); c.arc(e.x, e.y - 4, e.r + 1, 0.25 * Math.PI, 0.8 * Math.PI); c.stroke();
+      c.fillStyle = opt.brow || '#9b3f52'; c.fill(Hp.brow); c.lineWidth = 3; c.stroke(Hp.brow);
+      if (opt.tear) tearDrop(c, e, opt.tear);
+      c.restore();
+      return;
+    }
+    c.fillStyle = INK; c.beginPath(); c.arc(e.x, e.y, e.r + 2, 0, TAU); c.fill();
+    const ig = c.createRadialGradient(e.x, e.y + 2, 1, e.x, e.y, e.r);
+    ig.addColorStop(0, '#ffd34d'); ig.addColorStop(1, '#c46a10');
+    c.fillStyle = ig; c.beginPath(); c.arc(e.x, e.y, e.r, 0, TAU); c.fill();
+    c.fillStyle = INK; c.beginPath(); c.ellipse(e.x + 1.5, e.y, 3, 4.2, 0, 0, TAU); c.fill();
+    c.fillStyle = '#fff'; c.beginPath(); c.arc(e.x - 2, e.y - 3, 2.2, 0, TAU); c.fill();
+    c.beginPath(); c.arc(e.x + 3, e.y + 3, 1, 0, TAU); c.fill();
+    // heavy brow (fierce) – or raised/soft for sorrow
+    c.save();
+    if (opt.sad) { c.translate(e.x, e.y); c.rotate(-0.35); c.translate(-e.x, -e.y - 3); }
+    c.fillStyle = opt.brow || '#9b3f52'; c.fill(Hp.brow);
+    c.strokeStyle = INK; c.lineWidth = 3; c.stroke(Hp.brow);
+    c.restore();
+    if (opt.tear) tearDrop(c, e, opt.tear);
+    c.restore();
+  }
+
+  /** Tear welling then rolling down (u in 0..1, loops if > 1). */
+  function tearDrop(c, e, u) {
+    const k = u % 1;
+    const well = Math.min(1, k * 3), fall = Math.max(0, (k - 0.33) / 0.67);
+    const x = e.x + 4 + fall * 6, y = e.y + e.r + 2 + fall * fall * 70, r = 3 + 2.5 * well;
+    c.save(); c.globalAlpha *= 1 - Math.max(0, (fall - 0.8) / 0.2);
+    c.fillStyle = 'rgba(170,220,255,0.95)'; c.strokeStyle = '#3b6fa8'; c.lineWidth = 1.5;
+    c.beginPath(); c.moveTo(x, y - r * 2.1); c.quadraticCurveTo(x + r, y - r * 0.6, x + r, y);
+    c.arc(x, y, r, 0, Math.PI); c.quadraticCurveTo(x - r, y - r * 0.6, x, y - r * 2.1); c.fill(); c.stroke();
+    c.fillStyle = '#fff'; c.beginPath(); c.arc(x - r * 0.35, y - r * 0.2, r * 0.3, 0, TAU); c.fill();
+    c.restore();
+  }
+
+  function drawJatayu(c, tau, alpha = 1) {
+    drawBird(c, S.jatayuState(tau), S.jatayuRig(tau), { alpha });
+  }
+
+  function drawBird(c, st, R, opt = {}) {
+    const alpha = opt.alpha ?? 1;
+    const Pb = Object.assign({}, P, opt.pal || {});
+    c.save();
+    c.globalAlpha = alpha;
+    c.translate(st.x, st.y); c.scale(-st.scale, st.scale); c.rotate(st.pitch);
+    const Lb = rot({ x: -LW.x, y: LW.y }, -st.pitch);
+
+    wing(c, R.far, Lb, true, Pb);
+    if (!opt.noLegs) legDraw(c, R, Lb, true, Pb);
+    for (let k = 0; k < R.tail.length; k++) {         // outer tail feathers first
+      const idx = k % 2 ? R.tail.length - 1 - (k >> 1) : (k >> 1);
+      feather(c, R.tail[idx], Pb.feather, Lb, 2.6);
+    }
+    // body + mantle feathering
+    const body = S.ellipse(0, 0, 100, 50, -0.06);
+    cel3(c, body, Pb.body, Lb, 12, 4, 4.5);
+    c.save(); c.clip(body);
+    c.strokeStyle = 'rgba(210,180,140,0.35)'; c.lineWidth = 1.6;
+    for (let row = 0; row < 5; row++) {
+      for (let k = 0; k < 9; k++) {
+        const x = -80 + k * 20 + (row % 2) * 10, y = -40 + row * 14;
+        c.beginPath(); c.arc(x, y, 9, 0.15 * Math.PI, 0.85 * Math.PI); c.stroke();
+      }
+    }
+    const belly = S.ellipse(14, 22, 72, 24, -0.06);
+    c.fillStyle = 'rgba(160,120,90,0.45)'; c.fill(belly);
+    c.restore();
+    if (!opt.noLegs) legDraw(c, R, Lb, false, Pb);
+
+    // neck, ruff, gold collar, head
+    const nb = R.neckBase, hd = R.head;
+    const neck = S.ribbon(nb, { x: lerp(nb.x, hd.x, 0.35) + 6, y: lerp(nb.y, hd.y, 0.35) + 4 },
+      { x: lerp(nb.x, hd.x, 0.7) - 2, y: lerp(nb.y, hd.y, 0.7) + 2 }, { x: hd.x - 4, y: hd.y + 2 }, 30, 20);
+    cel3(c, neck, Pb.skin, Lb, 5, 2.5, 4);
+    c.save(); c.clip(neck); c.strokeStyle = P.skin[2]; c.lineWidth = 1.6;
+    for (let k = 1; k < 5; k++) {
+      const u = k / 5, px = lerp(nb.x, hd.x, u), py = lerp(nb.y, hd.y, u);
+      c.beginPath(); c.arc(px, py, 12, 1.3, 2.6); c.stroke();
+    }
+    c.restore();
+    const ruffBack = S.ruffPath(nb.x - 2, nb.y + 2, 36, 46, 15, 0.82, 5);
+    cel3(c, ruffBack, Pb.ruff, Lb, 7, 3, 3.5);
+    const ruffFront = S.ruffPath(nb.x + 8, nb.y - 4, 22, 29, 11, 0.8, 9);
+    cel3(c, ruffFront, Pb.ruff, Lb, 4, 2, 2.5);
+    // gold collar with ruby (Jatayu is a king among birds)
+    const cx = lerp(nb.x, hd.x, 0.3) + 4, cy = lerp(nb.y, hd.y, 0.3);
+    const ang = Math.atan2(hd.y - nb.y, hd.x - nb.x);
+    const collar = S.ellipse(cx, cy, 6, 17, ang);
+    if (opt.collar !== false) {
+      cel3(c, collar, P.gold, Lb, 3, 2, 3);
+      cel3(c, S.ellipse(cx + 3, cy + 6, 4.5, 4.5), P.red, Lb, 2, 1.5, 2);
+    }
+    head(c, R, Lb, Pb, opt);
+
+    wing(c, R.near, Lb, false, Pb);
+    if (opt.after) opt.after(c, R, Lb);
+    c.restore();
+  }
+
+  // =================================================================
+  // BIRDS, FEATHERS
+  // =================================================================
+  function birds(c, tau) {
+    for (const b of S.birdsState(tau)) {
+      c.save(); c.translate(b.x, b.y); c.scale(b.dir, 1);
+      const near = (b.size - 22) / 10;
+      c.fillStyle = near > 0.5 ? '#251e36' : '#3d3a5c';
+      c.fill(S.birdPath(b.size * 1.15, b.flap));
+      c.restore();
+    }
+  }
+
+  function burstFeathers(c, tau) {
+    for (const f of S.feathersState(tau)) {
+      if (f.alpha <= 0) continue;
+      c.save(); c.globalAlpha = f.alpha;
+      const fe = { x: f.x, y: f.y, a: f.rot, len: 46 * f.size, w: 13 * f.size, finger: false };
+      feather(c, fe, f.light ? P.ruff : P.feather, LW, 2);
+      c.restore();
+    }
+  }
+
+  // =================================================================
+  // EFFECTS
+  // =================================================================
+  function speedLines(c, t, f) {
+    const a = 1 - smooth((t - 1.25) / 0.3);
+    if (a <= 0) return;
+    const dx = -0.6, dy = 0.8;
+    c.save(); c.lineCap = 'round';
+    for (let i = 0; i < 55; i++) {
+      const cx = hash(f, i, 1) * (W + 500) - 250, cy = hash(f, i, 2) * H * 0.8;
+      const len = 300 + 800 * hash(f, i, 3);
+      c.globalAlpha = a * (0.25 + 0.5 * hash(f, i, 4));
+      c.strokeStyle = '#ffffff'; c.lineWidth = 1.5 + 5 * hash(f, i, 5);
+      c.beginPath(); c.moveTo(cx - dx * len / 2, cy - dy * len / 2); c.lineTo(cx + dx * len / 2, cy + dy * len / 2); c.stroke();
+    }
+    c.restore();
+  }
+
+  function starBurst(c, x, y, r0, r1, spikes, rot0) {
+    c.beginPath();
+    for (let i = 0; i < spikes * 2; i++) {
+      const a = rot0 + (i / (spikes * 2)) * TAU, r = i % 2 ? r0 : r1 * (0.75 + 0.25 * hash(i, spikes));
+      const px = x + Math.cos(a) * r, py = y + Math.sin(a) * r;
+      i ? c.lineTo(px, py) : c.moveTo(px, py);
+    }
+    c.closePath();
+  }
+
+  function radialLines(c, x, y, f, color) {
+    c.save(); c.fillStyle = color;
+    for (let i = 0; i < 80; i++) {
+      const a = (i / 80) * TAU + hash(f, i, 31) * 0.07;
+      const w = 0.005 + 0.018 * hash(f, i, 32);
+      const r0 = 110 + 280 * hash(f, i, 33);
+      c.beginPath();
+      c.moveTo(x + Math.cos(a) * r0, y + Math.sin(a) * r0);
+      c.lineTo(x + Math.cos(a - w) * 2600, y + Math.sin(a - w) * 2600);
+      c.lineTo(x + Math.cos(a + w) * 2600, y + Math.sin(a + w) * 2600);
+      c.closePath(); c.fill();
+    }
+    c.restore();
+  }
+  global.AnimeKit = { setMode, INK, P, LW, rot, cel3, viman, drawJatayu, drawBird, feather, wing, legDraw, head,
+                      birds, burstFeathers, speedLines, starBurst, radialLines, bell };
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+/* ===== demo.js ===== */
+/*
+ * रंगीन जटायु / सम्पाती — v3 reel वाले colourful (real-mode) पक्षी, अकेले।
+ * Rig: Shapes.rigFromPose (shapes.js), Paint: AnimeKit.drawBird (anime-kit.js) in 'real' mode.
+ * URL: ?pal=youngJ | oldJ | youngS | golden   (youngJ = जवान जटायु, youngS = जवान सम्पाती)
+ */
+(function () {
+  const S = window.Shapes, K = window.AnimeKit, TAU = Math.PI * 2;
+  const PALS = {
+    youngJ: { feather: ['#b89070', '#6a4a32', '#33221a', '#e8d6c0'], featherFar: ['#8a6a50', '#4a3424', '#22160e', '#b8a080'], covert: ['#c8a07a', '#7a5638', '#3e2818', '#f0dcc4'], body: ['#a07a5a', '#5a3e2a', '#2a1a10'], skin: ['#f0c8c0', '#d89a98', '#a86870'] },
+    oldJ:   { feather: ['#c8c0b8', '#7e7670', '#3e3834', '#efe8e0'], featherFar: ['#948c86', '#57504c', '#2c2826', '#c0b8b0'], covert: ['#dcd4cc', '#968e86', '#544c46', '#f6f0e8'], body: ['#aaa29a', '#655e58', '#34302c'], skin: ['#f6d8d6', '#dca4a8', '#a8707a'] },
+    youngS: { feather: ['#c48a5c', '#7a4428', '#3a1a0c', '#f0d0b0'], featherFar: ['#94603e', '#552a16', '#2a1208', '#c49a78'], covert: ['#d8a070', '#925430', '#4e2810', '#f8e0c4'], body: ['#b07a52', '#6a3820', '#36180a'], ruff: ['#fff6e0', '#efe0c0', '#c8b088'] },
+    golden: { feather: ['#ffe8a8', '#e0a848', '#8a5a1a', '#fff6d8'], featherFar: ['#d8b070', '#9a6828', '#4e340e', '#f4dca8'], covert: ['#fff0c4', '#ecbc6c', '#a4702a', '#fffbe8'], body: ['#dca060', '#8e5828', '#4a2c0e'] },
+  };
+  // पंख फड़फड़ाने का pose (theta = पंख का कोण, lag = पीछे चलने वाले पंखों के लिए)
+  function flyPose(t, o = {}) {
+    const f = o.freq ?? 1.8, amp = o.amp ?? 0.85, cen = o.center ?? 3.62, ph = o.phase ?? 0;
+    const th = (tt) => cen + amp * Math.cos(TAU * (f * tt + ph));
+    return { pose: { spread: 1, theta: th(t), talons: 0, pitch: 0, tailSpread: 0.5, jaw: o.jaw ?? 0, grip: 0, wingScale: 1, headRot: 0, neck: 0 }, lag: th(t - 0.07) };
+  }
+  // x,y = स्थान, s = आकार, heading = दिशा (radian)
+  function drawJatayu(c, x, y, s, heading, fp, opt = {}) {
+    const R = S.rigFromPose(fp.pose, fp.lag);
+    c.save(); c.translate(x, y); c.rotate(heading); c.scale(opt.flip ? 1 : -1, 1);
+    K.setMode('real');
+    K.drawBird(c, { x: 0, y: 0, scale: s, pitch: 0 }, R, opt);
+    K.setMode('cel');
+    c.restore();
+  }
+  const pal = PALS[new URLSearchParams(location.search).get('pal')] || PALS[window.DEFAULT_PAL || 'youngJ'];
+  const cv = document.getElementById('c'), c = cv.getContext('2d');
+  function frame(t) {
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    const g = c.createLinearGradient(0, 0, 0, cv.height);
+    g.addColorStop(0, '#14306a'); g.addColorStop(0.5, '#4a76b8'); g.addColorStop(0.8, '#f0b890'); g.addColorStop(1, '#ffe0b8');
+    c.fillStyle = g; c.fillRect(0, 0, cv.width, cv.height);
+    drawJatayu(c, cv.width / 2, cv.height / 2 + 20 * Math.sin(t * 1.5), 1.4, -0.1, flyPose(t), { pal });
+  }
+  window.renderFrame = frame; window.__ready = true; window.TOTAL = 4; window.PALS = PALS; window.drawJatayu = drawJatayu; window.flyPose = flyPose;
+  const t0 = performance.now();
+  (function loop(now) { frame((now - t0) / 1000); requestAnimationFrame(loop); })(t0);
+})();
+
+</script>
+</body></html>
