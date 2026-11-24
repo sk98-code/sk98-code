@@ -2,20 +2,22 @@
 
 **Format:** 1080×1920 (9:16), 30 fps, ~2:45
 **Look:** realistic, cinematic Indian-mythology concept art (painterly realism, film lighting, volumetric light, mist, depth of field). No cartoon shapes.
-**Method:** every shot is a realistic AI-painted frame (consistent characters from reference sheets), brought to life with camera moves (slow push / pan / tilt), light rays, embers, mist, feathers, flashes, and cross-dissolves. Optional: 2–3 key shots as real AI video clips.
+**Method:** drawn entirely in code (no AI images), animated with camera moves, light rays, embers, mist, feathers, flashes and cross-dissolves.
 **Audio:** narration — *Viraj – Calm Devotional Narrator* (ElevenLabs v4). During dialogue the narrator is silent.
 Characters — Ravana: *Ayush M (deep)* · old Jatayu: *Grandpa Danish* · Sita: *Nitya* · Rama: *Pranit* · Sampati: *Rohit* · Angad: *Yugandhar* · young Jatayu/Sampati: young voices.
 Music: tanpura/flute drone, soft drums only in the fight. Real-sounding SFX.
 
 ---
 
-## HOOK — curiosity, calm (0:00–0:13)
+## HOOK — emotional, calm (0:00–0:12)
 
 | # | Shot (camera) | Visual | Audio |
 |---|---|---|---|
-| 01 | Extreme close-up → slow pull back (5 s) | An ancient vulture's amber eye opens in dawn mist; a tear-like glint. | **N:** "क्या आप जानते हैं... माता सीता का पता सबसे पहले किसने बताया था?" |
-| 02 | Wide, slow push (6 s) | A wingless old vulture alone on a high cliff above the ocean at dusk, wind in his ruff. | **N:** "ना हनुमान ने... ना अंगद ने। बल्कि एक ऐसे पक्षी ने, जिसके पंख बरसों पहले जल चुके थे।" |
-| T | Title (3 s) | Gold title over a sky of slow clouds: **सम्पाती और जटायु** — *त्याग की अमर कथा* | soft chime |
+| 01 | Slow push-in (6 s) | Two vultures in silhouette against an enormous setting sun — the elder spreading his wings over the younger. Haze, rays. | **N:** "कहते हैं... सच्चा भाई वही है, जो अपने भाई के लिए सूरज से भी टकरा जाए।" |
+| 02 | Slow pull-back (4 s) | The sun sinks; the two birds become one silhouette; dust motes in the light. | **N:** "यह कथा है... ऐसे ही दो भाइयों की।" |
+| T | Title (3 s) | Gold title over slow clouds: **सम्पाती और जटायु** — *त्याग की अमर कथा* | soft chime |
+
+**Visual method (code-only):** cinematic realism — noise-textured skies, clouds, rock and water; atmospheric haze, volumetric light, fire and smoke particles, depth-of-field; human characters as realistic-proportion silhouettes with rim light (no cartoon faces); vultures with soft realistic shading, no outlines.
 
 ## ACT 1 — The two brothers (0:13–0:48)
 

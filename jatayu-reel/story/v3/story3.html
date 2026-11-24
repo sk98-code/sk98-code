@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<title>Sampati aur Jatayu</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  @font-face { font-family: 'Noto Sans Devanagari'; font-weight: 700; src: url(../fonts/noto-sans-devanagari-devanagari-700-normal.woff2) format('woff2'); }
+  @font-face { font-family: 'Rozha One'; src: url(../fonts/rozha-one-devanagari-400-normal.woff2) format('woff2'); }
+  html, body { margin: 0; height: 100%; background: #000; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { height: 100vh; width: auto; aspect-ratio: 9 / 16; display: block; }
+  body.render canvas { height: auto; }
+</style>
+</head>
+<body>
+<canvas id="c" width="1080" height="1920"></canvas>
+<script src="../../anims/shapes.js"></script>
+<script src="../../anims/anime-kit.js"></script>
+<script src="cine.js"></script>
+<script src="figures.js"></script>
+<script src="lanka.js"></script>
+<script src="timeline3.js"></script>
+<script>
+/*
+ * सम्पाती और जटायु — realistic cinematic cut (storyboard v2), drawn entirely in code.
+ * Shots follow STORYBOARD.md; timing comes from timeline3.js (voice-driven).
+ * renderFrame(t) is a pure function of t.
+ */
+(function () {
+  const S = window.Shapes, K = window.AnimeKit, C = window.Cine, F = window.Figures, TL = window.TIMELINE3;
+  const { W, H, FPS, TAU, clamp, lerp, smooth, hash } = S;
+  const canvas = document.getElementById('c'), ctx = canvas.getContext('2d');
+  const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+  const bufA = mk(W, H), bufB = mk(W, H), bloom = mk(W / 4, H / 4), grain = mk(W / 4, H / 4);
+  const bctx = bloom.getContext('2d'), gctx = grain.getContext('2d'), gdata = gctx.createImageData(W / 4, H / 4);
+
+  // ---------------------------------------------------------------- birds
+  const PALS = {
+    youngJ: { feather: ['#b89070', '#6a4a32', '#33221a', '#e8d6c0'], featherFar: ['#8a6a50', '#4a3424', '#22160e', '#b8a080'], covert: ['#c8a07a', '#7a5638', '#3e2818', '#f0dcc4'], body: ['#a07a5a', '#5a3e2a', '#2a1a10'], skin: ['#f0c8c0', '#d89a98', '#a86870'] },
+    youngS: { feather: ['#c48a5c', '#7a4428', '#3a1a0c', '#f0d0b0'], featherFar: ['#94603e', '#552a16', '#2a1208', '#c49a78'], covert: ['#d8a070', '#925430', '#4e2810', '#f8e0c4'], body: ['#b07a52', '#6a3820', '#36180a'], ruff: ['#fff6e0', '#efe0c0', '#c8b088'] },
+    oldJ: { feather: ['#c8c0b8', '#7e7670', '#3e3834', '#efe8e0'], featherFar: ['#948c86', '#57504c', '#2c2826', '#c0b8b0'], covert: ['#dcd4cc', '#968e86', '#544c46', '#f6f0e8'], body: ['#aaa29a', '#655e58', '#34302c'], skin: ['#f6d8d6', '#dca4a8', '#a8707a'] },
+    burnt: { feather: ['#7a6a60', '#3a2e28', '#181210', '#6a5a52'], featherFar: ['#5a4c46', '#2a201c', '#100c0a', '#4a3e38'], covert: ['#8a7a70', '#463830', '#221a16', '#7a6a60'], body: ['#8a6a54', '#4a3020', '#22140a'], ruff: ['#e8dcc8', '#c8b89c', '#8e7e66'] },
+    golden: { feather: ['#ffe8a8', '#e0a848', '#8a5a1a', '#fff6d8'], featherFar: ['#d8b070', '#9a6828', '#4e340e', '#f4dca8'], covert: ['#fff0c4', '#ecbc6c', '#a4702a', '#fffbe8'], body: ['#dca060', '#8e5828', '#4a2c0e'] },
+    spirit: { feather: ['#ffffff', '#eaf2ff', '#bccbea', '#ffffff'], featherFar: ['#f4f8ff', '#d4def6', '#a4b4dc'], covert: ['#ffffff', '#f0f6ff', '#ccd8f2', '#ffffff'], body: ['#ffffff', '#eaf2ff', '#bccbea'], skin: ['#ffffff', '#f0f0ff', '#c8c8e8'] },
+  };
+  function flyPose(t, o = {}) {
+    const f = o.freq ?? 1.8, amp = o.amp ?? 0.85, cen = o.center ?? 3.62, ph = o.phase ?? 0;
+    const th = (tt) => cen + amp * Math.cos(TAU * (f * tt + ph));
+    return { pose: { spread: o.spread ?? 1, theta: th(t), talons: o.talons ?? 0, pitch: 0, tailSpread: o.tail ?? 0.5, jaw: o.jaw ?? 0, grip: o.grip ?? 0, wingScale: o.wingScale ?? 1, headRot: o.headRot ?? 0, neck: o.neck ?? 0 }, lag: th(t - 0.07) };
+  }
+  function bird(c, x, y, s, heading, fp, opt = {}) {
+    const R = S.rigFromPose(fp.pose, fp.lag);
+    c.save(); c.translate(x, y); c.rotate(heading); c.scale(opt.flip ? 1 : -1, 1);
+    K.drawBird(c, { x: 0, y: 0, scale: s, pitch: 0 }, R, opt);
+    c.restore();
+  }
+  const mode = (m, o, fn) => { K.setMode(m, o); fn(); K.setMode('cel'); };
+  const speaking = (u, ln) => (ln && u > ln.start && u < ln.end ? 0.35 + 0.45 * Math.abs(Math.sin(u * 13)) : 0);
+  const cam = (c, z, fx, fy, rot = 0) => C.camera(c, z, fx, fy, rot);
+
+  // ---------------------------------------------------------------- shots
+  const SH = {};
+
+  SH['01'] = (c, u, sh) => {                                   // hook: two brothers before the sun
+    const k = u / sh.length, L = { x: 540, y: 1060 };
+    C.sky(c, [[0, '#06040e'], [0.3, '#2a0e2a'], [0.48, '#7a2232'], [0.58, '#d8582e'], [0.64, '#ffa048'], [0.7, '#ffd48a'], [1, '#ffcc80']]);
+    c.save(); cam(c, lerp(1, 1.12, smooth(k)), 540, 1020);
+    C.sun(c, L.x, L.y, 210, '#fff6dc'); C.rays(c, L.x, L.y, u, 0.11, 18);
+    C.clouds(c, 760, 380, u * 12, '#ff9a6a', '#2a0c1e', { x: 0, y: 1 }, 0.85, 4, 4);
+    C.mountains(c, [{ y: 1520, amp: 220, seed: 3.1, col: ['#3a1222', '#12060c'], rim: 'rgba(255,150,90,1)', haze: 'rgba(200,80,60,0.45)', rock: 0.12 },
+                    { y: 1720, amp: 180, seed: 6.4, col: ['#14060c', '#050204'], rim: 'rgba(255,130,80,0.8)', rock: 0.1 }], L, u);
+    mode('sil', { dark: '#120608', rim: 'rgba(255,190,110,1)', w: 3.4 }, () => {
+      bird(c, 560, 930 + 10 * Math.sin(u * 1.4), 1.2, -0.05, { pose: { spread: 1, theta: 4.3 + 0.06 * Math.sin(u * 2), talons: 0, pitch: 0, tailSpread: 1, jaw: 0, grip: 0 }, lag: 4.3 }, {});
+      bird(c, 520, 1140 + 12 * Math.sin(u * 1.7), 0.8, -0.1, flyPose(u, { freq: 1.6, phase: 0.3 }), {});
+    });
+    C.motes(c, u, 36, '255,210,150', 11);
+    c.restore();
+  };
+  SH['02'] = (c, u, sh) => {
+    const k = u / sh.length, L = { x: 540, y: 1060 + 80 * k };
+    C.sky(c, [[0, '#06040e'], [0.3, '#2a0e2a'], [0.48, '#7a2232'], [0.58, '#d8582e'], [0.66, '#ffa048'], [0.72, '#ffd48a'], [1, '#ffcc80']]);
+    c.save(); cam(c, lerp(1.12, 0.98, smooth(k)), 540, 1020);
+    C.sun(c, L.x, L.y, 210, '#fff6dc'); C.rays(c, L.x, L.y, u + 8, 0.1, 18);
+    C.clouds(c, 760, 380, (u + 8) * 12, '#ff9a6a', '#2a0c1e', { x: 0, y: 1 }, 0.85, 4, 4);
+    C.mountains(c, [{ y: 1520, amp: 220, seed: 3.1, col: ['#3a1222', '#12060c'], rim: 'rgba(255,150,90,1)', haze: 'rgba(200,80,60,0.45)', rock: 0.12 },
+                    { y: 1720, amp: 180, seed: 6.4, col: ['#14060c', '#050204'], rim: 'rgba(255,130,80,0.8)', rock: 0.1 }], L, u);
+    mode('sil', { dark: '#120608', rim: 'rgba(255,190,110,1)', w: 3 }, () => {
+      bird(c, lerp(560, 300, k), lerp(930, 820, k), lerp(1.2, 0.6, k), Math.PI - 0.1, flyPose(u, { freq: 1.4 }), { flip: true });
+      bird(c, lerp(520, 330, k), lerp(1140, 880, k), lerp(0.8, 0.45, k), Math.PI - 0.12, flyPose(u, { freq: 1.6, phase: 0.3 }), { flip: true });
+    });
+    C.motes(c, u + 8, 36, '255,210,150', 11);
+    c.restore();
+    const out = smooth((u - sh.length + 0.8) / 0.8); if (out > 0) { c.fillStyle = `rgba(0,0,0,${out})`; c.fillRect(0, 0, W, H); }
+  };
+  SH['T'] = (c, u, sh) => {
+    C.sky(c, [[0, '#04030a'], [0.5, '#120a1c'], [1, '#2a1012']]);
+    C.stars(c, 120, 0.8, u, 4);
+    C.glow(c, 540, 1400, 1000, 'rgba(255,170,90,0.45)', 'rgba(255,120,60,0.15)');
+    C.clouds(c, 1450, 420, u * 20, '#ffb070', '#1a0a12', { x: 0, y: -1 }, 0.9, 6, 4);
+    const a = smooth(u / 0.9), z = lerp(1.08, 1, smooth(u / sh.length));
+    c.save(); c.globalAlpha = a; c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.translate(W / 2, 780); c.scale(z, z);
+    const g = c.createLinearGradient(0, -120, 0, 120); g.addColorStop(0, '#fff6d0'); g.addColorStop(0.5, '#f4c058'); g.addColorStop(1, '#b8741a');
+    c.font = "150px 'Rozha One'"; c.shadowColor = 'rgba(255,170,80,0.6)'; c.shadowBlur = 40;
+    c.fillStyle = g; c.fillText('सम्पाती', 0, -90); c.fillText('और जटायु', 0, 90);
+    c.shadowBlur = 0; c.globalAlpha = a * smooth((u - 0.6) / 0.8);
+    c.font = "700 52px 'Noto Sans Devanagari'"; c.fillStyle = '#f2dcc0'; c.fillText('त्याग की अमर कथा', 0, 250);
+    c.restore();
+  };
+
+  function himalaya(c, u, L, off) {
+    C.sky(c, [[0, '#0b1838'], [0.32, '#33447e'], [0.5, '#b8788a'], [0.6, '#f4b088'], [0.66, '#ffdcae'], [1, '#ffd8a8']]);
+    C.stars(c, 50, 1 - smooth(u / 5), u, 2, 500);
+    C.sun(c, L.x, L.y, 64); C.rays(c, L.x, L.y, u, 0.09, 16);
+    C.clouds(c, 520, 420, u * 18 + off, '#ffd8c4', '#4a3e70', { x: 0, y: 1 }, 0.9, 1, 5);
+    C.mountains(c, [
+      { y: 1300, amp: 520, seed: 2.1, off, col: ['#9a8ab8', '#6a5a8a'], rim: 'rgba(255,214,176,1)', snow: 'rgba(255,238,236,0.92)', haze: 'rgba(232,176,176,0.55)', jag: 1.3 },
+      { y: 1520, amp: 420, seed: 5.3, off: off * 1.4, col: ['#5a4a78', '#2a2244'], rim: 'rgba(255,184,144,0.9)', snow: 'rgba(224,204,232,0.85)', haze: 'rgba(190,130,150,0.5)', jag: 1.2 },
+      { y: 1760, amp: 300, seed: 8.7, off: off * 2, col: ['#241a36', '#0c0814'], rim: 'rgba(255,160,120,0.7)' }], L, u);
+    C.fogBand(c, 1450, 260, 'rgba(255,206,196,1)', u, 3, 0.32);
+  }
+  SH['03'] = (c, u, sh) => {
+    const k = u / sh.length, L = { x: 620, y: 1150 };
+    c.save(); cam(c, 1.05, lerp(470, 640, k), 960);
+    himalaya(c, u, L, u * 10);
+    mode('real', null, () => {
+      bird(c, 300 + u * 55, 820 + 20 * Math.sin(u * 1.3), 0.95, -0.05, flyPose(u, { freq: 1.5 }), { pal: PALS.youngS });
+      bird(c, 560 + u * 52, 1010 + 16 * Math.sin(u * 1.5 + 1), 0.76, -0.08, flyPose(u, { freq: 1.8, phase: 0.4 }), { pal: PALS.youngJ });
+    });
+    C.motes(c, u, 30, '255,224,180', 3);
+    c.restore();
+  };
+  SH['04'] = (c, u, sh) => {                                    // the challenge
+    const L = { x: 820, y: 1300 }, l1 = sh.lines[0], l2 = sh.lines[1];
+    C.sky(c, [[0, '#14306a'], [0.45, '#4a76b8'], [0.7, '#f0b890'], [0.8, '#ffe0b8'], [1, '#ffe0b8']]);
+    C.sun(c, L.x, L.y, 70); C.rays(c, L.x, L.y, u, 0.1);
+    C.clouds(c, 420, 360, u * 120, '#fff0e0', '#6a6aa0', { x: 0.3, y: 1 }, 0.9, 7, 4);
+    C.clouds(c, 1500, 520, u * 220, '#ffe8d8', '#7a6a98', { x: 0.3, y: -1 }, 0.95, 8, 4);
+    const surge = smooth((u - 0.5) / 2.5);
+    mode('real', null, () => {
+      bird(c, lerp(380, 300, surge), 1060 + 18 * Math.sin(u * 1.6), 1.25, -0.12, flyPose(u, { freq: 1.7, jaw: speaking(u, l2) }), { pal: PALS.youngS });
+      bird(c, lerp(560, 760, surge), lerp(860, 700, surge) + 14 * Math.sin(u * 2), 1.05, -0.25, flyPose(u, { freq: 2.4, phase: 0.3, jaw: speaking(u, l1) }), { pal: PALS.youngJ });
+    });
+    C.clouds(c, 1850, 420, u * 380, '#ffffff', '#8a8ab0', { x: 0, y: -1 }, 0.8, 9, 3);
+  };
+  function heatHaze(c, u, amt) {                               // shimmer: re-draw the frame in wavy slices
+    const b = bufA.getContext('2d'); b.setTransform(1, 0, 0, 1, 0, 0); b.drawImage(c.canvas, 0, 0);
+    c.save(); c.setTransform(1, 0, 0, 1, 0, 0);
+    for (let y = 0; y < H; y += 12) c.drawImage(bufA, 0, y, W, 12, Math.sin(y * 0.02 + u * 6) * amt, y, W, 12);
+    c.restore();
+  }
+  SH['05'] = (c, u, sh) => {
+    const k = u / sh.length, L = { x: 540, y: 380 };
+    C.sky(c, [[0, '#ffe8b0'], [0.15, '#ffb050'], [0.4, '#d8602a'], [0.75, '#5a2a4a'], [1, '#1a1030']]);
+    C.sun(c, L.x, L.y, 280, '#fffbe8', 'rgba(255,220,140,0.8)'); C.rays(c, L.x, L.y, u, 0.18, 22);
+    C.clouds(c, 1500 + u * 120, 500, u * 30, '#ffd0a0', '#4a2440', { x: 0, y: -1 }, 0.9, 10, 4);
+    mode('real', null, () => {
+      bird(c, 440, lerp(1450, 1150, k), lerp(0.7, 0.55, k), -1.45, flyPose(u, { freq: 2.6 }), { pal: PALS.youngS });
+      bird(c, 660, lerp(1380, 1060, k), lerp(0.6, 0.48, k), -1.6, flyPose(u, { freq: 2.9, phase: 0.3 }), { pal: PALS.youngJ });
+    });
+    heatHaze(c, u, 4 + 6 * k);
+  };
+  SH['06'] = (c, u, sh) => {                                    // close-up: Jatayu's wings start to burn
+    const ln = sh.lines[0], burn = smooth((u - 0.2) / 1.2);
+    C.sky(c, [[0, '#fff2c8'], [0.3, '#ffb048'], [0.7, '#c8401e'], [1, '#3a0e14']]);
+    C.glow(c, 860, 200, 1400, 'rgba(255,250,220,1)', 'rgba(255,190,90,0.6)');
+    c.save(); cam(c, lerp(1, 1.08, u / sh.length), 540, 960);
+    mode('real', null, () => {
+      bird(c, 600, 980, 1.35, -0.9, flyPose(u, { freq: 3.4, amp: 1.05, jaw: Math.max(speaking(u, ln), 0.3 * burn) }), {
+        pal: PALS.youngJ, after: (cc, R) => {
+          for (const w of [R.near, R.far]) {
+            for (let i = 0; i < 6; i++) C.fire(cc, w.prim[i].x, w.prim[i].y, 70, 120, u, i + 3, 0.5 * burn);
+          }
+        },
+      });
+    });
+    C.embers(c, 540, 1300, 900, 1300, u, 70 * burn, 5);
+    C.smoke(c, 700, 900, u, 6, 12, '90,70,60', 1.5);
+    c.restore();
+    heatHaze(c, u, 5);
+  };
+  SH['07'] = (c, u, sh) => {                                    // the elder brother shields him
+    const k = u / sh.length, L = { x: 540, y: 700 };
+    C.sky(c, [[0, '#ffefc0'], [0.2, '#ffb048'], [0.45, '#d0481e'], [0.8, '#3a0a14'], [1, '#14040a']]);
+    C.sun(c, L.x, L.y, 300, '#ffffff', 'rgba(255,230,160,0.9)'); C.rays(c, L.x, L.y, u, 0.22, 24);
+    c.save(); cam(c, lerp(1, 1.1, smooth(k)), 540, 980);
+    mode('sil', { dark: '#1a0606', rim: 'rgba(255,220,140,1)', w: 4 }, () => {
+      bird(c, 540, 1350 + 10 * Math.sin(u * 2), 0.7, -1.0, flyPose(u, { freq: 3, amp: 1 }), {});
+      bird(c, 560, 1000 + 8 * Math.sin(u * 1.6), 1.5, -0.25, { pose: { spread: 1, theta: 4.4 + 0.05 * Math.sin(u * 5), talons: 0.2, pitch: 0, tailSpread: 1, jaw: 0, grip: 0, wingScale: 1.2 }, lag: 4.4 }, {
+        after: (cc, R) => { for (const w of [R.near, R.far]) for (let i = 0; i < 10; i += 2) C.fire(cc, w.prim[i].x, w.prim[i].y, 60, 110, u, i + 20, 0.6 * smooth(k * 2)); },
+      });
+    });
+    C.embers(c, 540, 1300, 1000, 1200, u, 60, 7);
+    c.restore();
+  };
+  SH['08'] = (c, u, sh) => {                                    // the fall to the Vindhya
+    const k = u / sh.length, L = { x: 820, y: 1260 };
+    c.save(); cam(c, 1.05, 540, lerp(820, 1060, smooth(k)));
+    C.sky(c, [[0, '#0a0820'], [0.36, '#341a46'], [0.56, '#9a3a48'], [0.68, '#f0783a'], [0.76, '#ffc070'], [1, '#ffc070']]);
+    C.stars(c, 60, 0.6, u, 3, 500);
+    C.sun(c, L.x, L.y, 80, '#fff0d0'); C.rays(c, L.x, L.y, u, 0.1);
+    C.clouds(c, 700, 380, u * 30, '#ff9a6a', '#2a1230', { x: 0.2, y: 1 }, 0.8, 11, 4);
+    C.mountains(c, [{ y: 1380, amp: 300, seed: 3.3, col: ['#5a2a4a', '#2a1222'], rim: 'rgba(255,170,110,1)', haze: 'rgba(200,90,90,0.5)' },
+                    { y: 1600, amp: 420, seed: 7.7, col: ['#2e1428', '#12060c'], rim: 'rgba(255,140,90,0.9)', jag: 0.7, haze: 'rgba(120,40,60,0.4)' },
+                    { y: 1860, amp: 220, seed: 9.9, col: ['#0e060c', '#040204'] }], L, u);
+    const f = Math.min(1, k * 1.15), px = lerp(760, 470, f) + 60 * Math.sin(f * 6), py = lerp(260, 1420, f * f);
+    for (let i = 14; i >= 1; i--) {                                // smoke trail from earlier positions
+      const fk = Math.max(0, f - i * 0.03), sx = lerp(760, 470, fk) + 60 * Math.sin(fk * 6), sy = lerp(260, 1420, fk * fk);
+      const r = 30 + i * 9, g = c.createRadialGradient(sx, sy, 0, sx, sy, r);
+      g.addColorStop(0, `rgba(70,55,60,${0.4 * (1 - i / 15)})`); g.addColorStop(1, 'rgba(70,55,60,0)');
+      c.fillStyle = g; c.fillRect(sx - r, sy - r, 2 * r, 2 * r);
+    }
+    mode('real', null, () => {
+      if (f < 1) bird(c, px, py, 0.9, 1.3 + f * 5, { pose: { spread: 0.35, theta: 3.4, talons: 0.3, pitch: 0, tailSpread: 0.3, jaw: 0.6, grip: 0, wingScale: 0.8 }, lag: 3.6 },
+        { pal: PALS.burnt, after: (cc, R) => C.fire(cc, R.near.Tip.x, R.near.Tip.y, 50, 90, u, 31, 0.6) });
+      bird(c, lerp(300, -100, k), lerp(420, 300, k), 0.35, Math.PI + 0.1, flyPose(u, { freq: 2 }), { pal: PALS.youngJ, flip: true });
+    });
+    c.restore();
+  };
+
+  function panchavati(c, u, L) {
+    C.sky(c, [[0, '#14244a'], [0.38, '#405e8a'], [0.58, '#c89070'], [0.68, '#ffd4a0'], [1, '#ffd4a0']]);
+    C.sun(c, L.x, L.y, 58); C.rays(c, L.x, L.y, u, 0.17, 18);
+    C.clouds(c, 520, 380, u * 8, '#ffe2c0', '#3a4470', { x: 0.2, y: 1 }, 0.85, 12, 5);
+    C.mountains(c, [{ y: 1250, amp: 260, seed: 2.6, col: ['#5a6a86', '#3a4a66'], rim: 'rgba(255,220,170,0.9)', haze: 'rgba(240,200,160,0.6)', jag: 0.8 }], L, u);
+    C.forestLine(c, 1420, 300, '#1e3226', 'rgba(255,220,150,0.9)', L, 5);
+    C.fogBand(c, 1400, 220, 'rgba(255,220,180,1)', u, 5, 0.4);
+  }
+  SH['09'] = (c, u, sh) => {                                    // years later: Panchavati
+    const k = u / sh.length, L = { x: 820, y: 1180 };
+    c.save(); cam(c, lerp(1, 1.08, smooth(k)), 420, 900);
+    panchavati(c, u, L);
+    C.tree(c, 300, 1800, 1150, 7, '#0e1a12', 'rgba(255,220,140,0.9)', L);
+    mode('real', null, () => bird(c, 320, 760, 0.85, -0.05, { pose: { spread: 0.05, theta: 3.0, talons: 0.15, pitch: 0, tailSpread: 0.3, jaw: 0, grip: 1, headRot: -0.15 * Math.sin(u * 0.8) }, lag: 3.0 }, { pal: PALS.oldJ }));
+    C.forestLine(c, 1700, 280, '#0a140c', 'rgba(255,200,120,0.6)', L, 9);
+    C.motes(c, u, 40, '255,232,170', 5, 0, 700, W, 1000);
+    c.restore();
+  };
+
+  function vimanCast(c, u, vs, sc, o = {}) {                     // the viman as a backlit silhouette with its crew
+    mode('sil', { dark: '#150a0c', rim: o.rim || 'rgba(255,180,100,1)', w: 4 }, () => {
+      c.save(); c.translate(vs.x, vs.y); c.scale(sc, sc); c.translate(-vs.x, -vs.y);
+      K.viman(c, u, { x: vs.x, y: vs.y, rot: vs.rot, scale: 1 });
+      c.restore();
+    });
+    const L = o.light;
+    c.save(); c.translate(vs.x, vs.y); c.rotate(vs.rot); c.scale(sc, sc);
+    if (o.sita !== false) F.figure(c, { x: -110, y: -112, h: 150, face: -1, kind: 'woman' }, { stance: 'stand', armN: [-0.7 - 0.2 * Math.sin(u * 3), -0.3], armF: [-1.3, -0.2], head: -0.2 }, { x: (L.x - vs.x) / sc, y: (L.y - vs.y) / sc }, u, { dark: '#150a0c', rim: o.rim || 'rgba(255,190,110,1)', rimW: 4 });
+    F.figure(c, { x: 40, y: -112, h: 190, face: -1, kind: 'ravana', build: 'big', scarf: true }, { stance: 'stand', armN: o.ravArm || [1.1, 0.4], armF: [1.9, 0.2], head: o.ravHead || 0 }, { x: (L.x - vs.x) / sc, y: (L.y - vs.y) / sc }, u, { dark: '#150a0c', rim: o.rim || 'rgba(255,190,110,1)', rimW: 4 });
+    c.restore();
+  }
+  function sunsetSky(c, u, L, red = 0) {
+    C.sky(c, [[0, '#0e0618'], [0.36, '#3e1430'], [0.56, red ? '#a8281e' : '#c04a2a'], [0.66, '#ff9040'], [0.74, '#ffc068'], [1, '#ffc068']]);
+    C.sun(c, L.x, L.y, 90, '#fff0d0'); C.rays(c, L.x, L.y, u, 0.13, 16);
+    C.clouds(c, 560, 460, u * 40, '#ff9a6a', '#2a0a1a', { x: 0.3, y: 1 }, 0.95, 2, 4);
+  }
+  SH['10'] = (c, u, sh) => {                                    // Pushpak crosses the sky; Sita cries out
+    const k = u / sh.length, L = { x: 880, y: 1320 };
+    sunsetSky(c, u, L);
+    C.mountains(c, [{ y: 1640, amp: 200, seed: 4.2, col: ['#3a1424', '#1a0810'], rim: 'rgba(255,150,90,0.9)', haze: 'rgba(200,80,60,0.4)' }], L, u);
+    C.forestLine(c, 1800, 200, '#0e0608', 'rgba(255,140,80,0.7)', L, 12);
+    vimanCast(c, u, { x: lerp(820, 320, k), y: 1000 + 10 * Math.sin(u * 1.4), rot: 0.02 }, 1.25, { light: L });
+    C.motes(c, u, 26, '255,190,120', 4);
+  };
+  SH['11'] = (c, u, sh) => {                                    // Jatayu rises: "रुक जा, रावण!"
+    const k = u / sh.length, L = { x: 760, y: 1250 }, ln = sh.lines[0];
+    sunsetSky(c, u, L);
+    vimanCast(c, u, { x: lerp(900, 760, k), y: 520, rot: 0.02 }, 0.5, { light: L, sita: true });
+    c.save(); cam(c, lerp(1, 1.1, smooth(k)), 420, 1100);
+    C.tree(c, 280, 2100, 1350, 7, '#0c0608', 'rgba(255,170,90,0.9)', L, '#0c0608');
+    const rise = smooth((u - 0.3) / 1.2);
+    mode('sil', { dark: '#100608', rim: 'rgba(255,200,120,1)', w: 3.5 }, () =>
+      bird(c, 380, 1030 - 40 * rise, 1.5, -0.35, { pose: { spread: lerp(0.1, 1, rise), theta: lerp(3.0, 4.3, rise) + 0.05 * Math.sin(u * 4), talons: 0.4, pitch: 0, tailSpread: rise, jaw: speaking(u, ln), grip: 1 - rise, headRot: -0.3 }, lag: lerp(3.0, 4.25, rise) }, {}));
+    c.restore();
+    C.motes(c, u, 26, '255,190,120', 6);
+  };
+  SH['12'] = (c, u, sh) => {                                    // Ravana laughs
+    const k = u / sh.length, L = { x: 300, y: 1050 };
+    sunsetSky(c, u, L, 1);
+    c.save(); cam(c, lerp(1.02, 1.1, smooth(k)), 540, 1100);
+    const vs = { x: 600, y: 1850, rot: 0.01 };
+    mode('sil', { dark: '#120608', rim: 'rgba(255,160,90,1)', w: 4 }, () => { c.save(); c.translate(vs.x, vs.y); c.scale(2.2, 2.2); c.translate(-vs.x, -vs.y); K.viman(c, u, { x: vs.x, y: vs.y, rot: vs.rot, scale: 1 }); c.restore(); });
+    const laugh = sh.lines[0] && u < sh.lines[0].start + 2 ? 0.12 * Math.sin(u * 12) : 0;
+    F.figure(c, { x: 620, y: 1640, h: 1000, face: -1, kind: 'ravana', build: 'big', scarf: true }, { stance: 'stand', armN: [1.0 + laugh, 0.6], armF: [1.9, 0.2], head: -0.12 + laugh }, L, u, { dark: '#120608', rim: 'rgba(255,170,100,1)', rimW: 8 });
+    c.restore();
+    C.motes(c, u, 30, '255,170,110', 8);
+  };
+  SH['13'] = (c, u, sh) => {                                    // the fight
+    const L = { x: 900, y: 1200 }, ln = sh.lines[0];
+    sunsetSky(c, u, L, 1);
+    const fr = Math.round(u * FPS), shake = u > 1.5 && u < 2.4 ? 14 : u > 3.2 && u < 3.8 ? 10 : 0;
+    c.save(); c.translate((hash(fr, 1) - 0.5) * shake, (hash(fr, 2) - 0.5) * shake);
+    const close = u > 2.2;
+    c.save(); cam(c, close ? 1.5 : 1.05, close ? 560 : 540, close ? 1050 : 1100);
+    const vs = { x: 600, y: 1500, rot: -0.04 * Math.sin(Math.max(0, u - 1.6) * 6) * Math.exp(-Math.max(0, u - 1.6)) };
+    mode('sil', { dark: '#120608', rim: 'rgba(255,160,90,1)', w: 4 }, () => { c.save(); c.translate(vs.x, vs.y); c.scale(1.6, 1.6); c.translate(-vs.x, -vs.y); K.viman(c, u, { x: vs.x, y: vs.y, rot: vs.rot, scale: 1 }); c.restore(); });
+    const hit = u > 1.6;
+    const R = F.figure(c, { x: 640 + (hit ? 20 * smooth((u - 1.6) / 0.5) : 0), y: 1320, h: 560, face: -1, kind: hit ? 'man' : 'ravana', build: 'big', scarf: true, hair: hit ? 'long' : undefined },
+      { stance: 'stand', armN: hit ? [-1.9, -1.0] : [1.0, 0.6], armF: hit ? [-1.2, 1.1] : [1.9, 0.2], head: hit ? 0.2 : -0.1, lean: hit ? -0.15 : 0 }, L, u, { dark: '#120608', rim: 'rgba(255,170,100,1)', rimW: 6 });
+    if (hit) {                                                      // other heads still there (receding) + crown flying away
+      F.figure(c, { x: 660, y: 1320, h: 560, face: -1, kind: 'ravana', build: 'big' }, { stance: 'stand', armN: [-1.9, -1.0], armF: [-1.2, 1.1], head: 0.2, lean: -0.15 }, L, u, { dark: '#120608', rim: 'rgba(255,170,100,1)', rimW: 6, alpha: 0.85 });
+      const g = u - 1.6;
+      c.save(); c.translate(R.head.x - 200 * g, R.head.y - 120 * g + 260 * g * g); c.rotate(-g * 6);
+      c.fillStyle = '#f4c25a'; c.beginPath(); c.moveTo(-40, 20); c.lineTo(-36, -30); c.lineTo(-14, -14); c.lineTo(0, -60); c.lineTo(14, -14); c.lineTo(36, -30); c.lineTo(40, 20); c.closePath(); c.fill();
+      c.strokeStyle = '#6a3a08'; c.lineWidth = 3; c.stroke(); c.restore();
+    }
+    const dive = smooth(clamp(u / 1.6)), bx = lerp(80, R.head.x - 80, dive), by = lerp(300, R.head.y - 60, dive);
+    mode('sil', { dark: '#100608', rim: 'rgba(255,210,130,1)', w: 3 }, () =>
+      bird(c, hit ? R.head.x - 110 + 30 * Math.sin(u * 9) : bx, hit ? R.head.y - 130 + 20 * Math.sin(u * 7) : by, 1.0, hit ? -0.2 : 0.7, flyPose(u, { freq: hit ? 4 : 2.6, talons: 1, jaw: speaking(u, ln) }), {}));
+    if (u > 1.55 && u < 2.0) { const a = 1 - (u - 1.55) / 0.45; c.save(); c.globalCompositeOperation = 'lighter'; C.glow(c, R.head.x - 40, R.head.y - 40, 380 * a + 40, `rgba(255,240,200,${a})`); c.restore(); }
+    for (let i = 0; i < 26 && hit; i++) {                            // feathers and sparks
+      const g = u - 1.6, a = hash(i, 51) * TAU, r = (200 + 320 * hash(i, 52)) * (1 - Math.exp(-2 * g)) / 2;
+      const fx = R.head.x - 80 + Math.cos(a) * r, fy = R.head.y - 80 + Math.sin(a) * r + 60 * g * g;
+      c.save(); c.translate(fx, fy); c.rotate(a + g * 3); c.globalAlpha = 1 - smooth((g - 2.4) / 1.2);
+      c.fillStyle = i % 3 ? '#2a1e1a' : '#ffd8a0'; c.beginPath(); c.ellipse(0, 0, 22, 6, 0, 0, TAU); c.fill(); c.restore();
+    }
+    c.restore(); c.restore();
+  };
+  SH['14'] = (c, u, sh) => {                                    // Ravana draws the Chandrahas
+    const L = { x: 820, y: 900 };
+    C.sky(c, [[0, '#14040a'], [0.4, '#6a0e18'], [0.62, '#d8381e'], [0.75, '#ff8a3a'], [1, '#ff8a3a']]);
+    C.glow(c, L.x, L.y, 1100, 'rgba(255,150,80,0.6)');
+    c.save(); cam(c, lerp(1.05, 1.18, smooth(u / sh.length)), 540, 900);
+    const raise = smooth((u - 0.1) / 0.8);
+    const R = F.figure(c, { x: 520, y: 2300, h: 1900, face: 1, kind: 'man', build: 'big', hair: 'long', scarf: true },
+      { stance: 'stand', armN: [lerp(0.6, -1.5, raise), lerp(1.0, -0.6, raise)], armF: [1.9, 0.3], head: -0.1 }, L, u, { dark: '#100406', rim: 'rgba(255,150,90,1)', rimW: 10 });
+    F.sword(c, R.near, lerp(0.8, -1.9, raise), 560, u, clamp((u - 0.7) / 1.2), '#100406');
+    c.restore();
+  };
+  SH['15'] = (c, u, sh) => {                                    // the cut — slow fall through feathers
+    const k = u / sh.length, L = { x: 760, y: 1500 };
+    C.sky(c, [[0, '#0a0614'], [0.4, '#3a1028'], [0.68, '#a8382a'], [0.8, '#f08a48'], [1, '#f08a48']]);
+    C.glow(c, L.x, L.y, 1200, 'rgba(255,150,90,0.5)');
+    C.clouds(c, 1300, 520, u * 20, '#ff9a6a', '#2a0a1a', { x: 0, y: -1 }, 0.9, 13, 4);
+    mode('real', null, () => bird(c, lerp(480, 560, k), lerp(600, 1150, k), 1.4, 0.9 + k * 1.2,
+      { pose: { spread: 0.4, theta: 3.3 + 0.2 * Math.sin(u * 3), talons: 0.4, pitch: 0, tailSpread: 0.4, jaw: 0.5, grip: 0, wingScale: 0.45 }, lag: 3.4 }, { pal: PALS.oldJ }));
+    for (let i = 0; i < 40; i++) {
+      const x = hash(i, 81) * W + Math.sin(u * 1.2 + i) * 40, y = ((hash(i, 82) * H + u * (60 + 80 * hash(i, 83))) % (H + 200)) - 100;
+      c.save(); c.translate(x, y); c.rotate(u * (hash(i, 84) - 0.5) * 3 + i); c.globalAlpha = 0.85;
+      K.setMode('real'); K.feather(c, { x: 0, y: 0, a: 0, len: 50 + 40 * hash(i, 85), w: 14 }, PALS.oldJ.feather, K.LW, 0); K.setMode('cel');
+      c.restore();
+    }
+    const fl = 1 - smooth(u / 0.35); if (fl > 0) { c.fillStyle = `rgba(255,255,255,${fl})`; c.fillRect(0, 0, W, H); }
+  };
+  SH['16'] = (c, u, sh) => {                                    // Rama and Lakshmana arrive
+    const k = u / sh.length, L = { x: 900, y: 1150 };
+    C.sky(c, [[0, '#0a0a22'], [0.38, '#2e2448'], [0.58, '#a8504a'], [0.68, '#f09a5a'], [1, '#f09a5a']]);
+    C.sun(c, L.x, L.y, 50, '#ffe8c8'); C.rays(c, L.x, L.y, u, 0.12);
+    C.forestLine(c, 1300, 360, '#141418', 'rgba(255,170,110,0.85)', L, 14);
+    C.fogBand(c, 1320, 220, 'rgba(240,170,140,1)', u, 14, 0.35);
+    const gg = c.createLinearGradient(0, 1500, 0, H); gg.addColorStop(0, '#1e1a16'); gg.addColorStop(1, '#060504'); c.fillStyle = gg; c.fillRect(0, 1500, W, H);
+    mode('real', null, () => bird(c, 330, 1600, 1.0, 0.1, { pose: { spread: 0.25, theta: 2.9, talons: 0.1, pitch: 0, tailSpread: 0.3, jaw: 0, grip: 0, wingScale: 0.45, headRot: 0.2 }, lag: 2.9 }, { pal: PALS.oldJ }));
+    const run = smooth(k * 1.4);
+    F.figure(c, { x: lerp(1000, 560, run), y: 1660, h: 640, face: -1, kind: 'man', hair: 'jata', bow: 'far', quiver: true, scarf: true },
+      { stance: run < 0.95 ? 'walk' : 'kneel', step: u * 9, armN: [1.3, 0.4], armF: [1.8, -0.3], lean: run < 0.95 ? 0.15 : 0.1 }, L, u, { dark: '#0a0a0c', rim: 'rgba(255,200,140,1)', rimW: 6 });
+    F.figure(c, { x: lerp(1150, 860, run), y: 1600, h: 600, face: -1, kind: 'man', hair: 'jata', bow: 'near', quiver: true }, { stance: 'walk', step: u * 9 + 1, armN: [1.5, 0.3], armF: [1.7, -0.3] }, L, u, { dark: '#0a0a0c', rim: 'rgba(255,200,140,1)', rimW: 6 });
+    C.grass(c, 1880, u, '#040403', 4, 120);
+    C.motes(c, u, 30, '200,255,150', 15, 0, 1000, W, 800);
+  };
+  SH['17'] = (c, u, sh) => {                                    // last words: "दक्षिण की ओर..."
+    const k = u / sh.length, L = { x: 860, y: 1100 }, ln = sh.lines[0];
+    C.sky(c, [[0, '#06061a'], [0.4, '#22183c'], [0.62, '#7a3a4a'], [0.72, '#d07a4a'], [1, '#d07a4a']]);
+    C.stars(c, 50, 0.6, u, 9, 500);
+    C.glow(c, L.x, L.y, 900, 'rgba(255,170,110,0.45)');
+    C.forestLine(c, 1250, 320, '#0e0e14', 'rgba(255,160,100,0.7)', L, 16);
+    c.save(); cam(c, lerp(1.25, 1.35, smooth(k)), 520, 1350);
+    const gg = c.createLinearGradient(0, 1400, 0, H); gg.addColorStop(0, '#16120e'); gg.addColorStop(1, '#040302'); c.fillStyle = gg; c.fillRect(-200, 1400, W + 400, H);
+    F.figure(c, { x: 660, y: 1640, h: 600, face: -1, kind: 'man', hair: 'jata', quiver: true, scarf: true }, { stance: 'kneel', armN: [2.3, -0.9], armF: [1.9, -0.6], head: 0.25, lean: 0.12 }, L, u, { dark: '#0a0a0c', rim: 'rgba(255,190,130,1)', rimW: 6 });
+    const dead = ln && u > ln.end + 0.3;
+    mode('real', null, () => bird(c, 440, 1560, 0.95, 0.1, { pose: { spread: 0.25, theta: 2.9, talons: 0.1, pitch: 0, tailSpread: 0.3, jaw: speaking(u, ln) * 0.6, grip: 0, wingScale: 0.45, headRot: dead ? 0.7 : -0.35, neck: dead ? 0.5 : -0.2 }, lag: 2.9 }, { pal: PALS.oldJ, eyeClosed: dead, sad: true }));
+    c.restore();
+    C.motes(c, u, 30, '200,255,150', 17, 0, 900, W, 900);
+  };
+  SH['18'] = (c, u, sh) => {                                    // the last rites
+    const L = { x: 540, y: 1300 };
+    C.sky(c, [[0, '#020208'], [0.5, '#0c0a1c'], [0.8, '#2a1418'], [1, '#0a0606']]);
+    C.stars(c, 160, 0.9, u, 10, H * 0.55);
+    c.fillStyle = '#fff6e0'; c.beginPath(); c.arc(820, 320, 44, 0, TAU); c.fill(); C.glow(c, 820, 320, 300, 'rgba(220,230,255,0.45)');
+    C.forestLine(c, 1250, 300, '#08060a', 'rgba(255,140,60,0.8)', L, 18);
+    const fl = 0.85 + 0.15 * Math.sin(u * 9) * Math.sin(u * 5.3);
+    C.glow(c, L.x, L.y, 1000 * fl, 'rgba(255,170,80,0.75)', 'rgba(255,100,40,0.3)');
+    c.fillStyle = '#0c0806'; c.fillRect(0, 1420, W, H);
+    for (let i = 0; i < 5; i++) { c.fillStyle = '#2a160c'; c.save(); c.translate(540, 1420 - i * 18); c.rotate(i % 2 ? 0.06 : -0.06); c.fillRect(-170 + i * 14, -9, 340 - i * 28, 18); c.restore(); }
+    C.fire(c, L.x, 1380, 300, 520, u, 3, 2.2);
+    C.embers(c, L.x, 1250, 320, 1200, u, 80, 19);
+    C.smoke(c, L.x, 900, u, 20, 16, '70,60,70', 1.2);
+    for (const [x, face, h] of [[220, 1, 560], [860, -1, 600]]) {
+      F.figure(c, { x, y: 1760, h, face, kind: 'man', hair: 'jata', quiver: true }, { stance: 'stand', armN: [-0.25, -2.3], armF: [-0.1, -2.5], head: 0.15 }, L, u, { dark: '#060406', rim: 'rgba(255,170,80,1)', rimW: 7 });
+    }
+  };
+  function vindhya(c, u, L, push = 1) {
+    C.sky(c, [[0, '#060c26'], [0.3, '#1c2a5c'], [0.48, '#6a3a6e'], [0.6, '#e0706a'], [0.68, '#ffb470'], [1, '#ffb470']]);
+    C.stars(c, 70, 0.7, u, 7, 600);
+    C.sun(c, L.x, L.y, 70, '#fff2cc'); C.rays(c, L.x, L.y, u, 0.1);
+    C.clouds(c, 520, 380, u * 10, '#ffc49a', '#2a2448', { x: 0, y: 1 }, 0.9, 14, 5);
+    C.sea(c, 1300, u, '#2a3460', '#050a18', L.x);
+  }
+  function cliff(c, u, L) {
+    const p = new Path2D(); p.moveTo(1180, 2200); p.lineTo(1180, 600);
+    const pts = C.ridgePts(0, 1, 4.4, 0, 1, 20);
+    for (let y = 600; y <= 1500; y += 20) p.lineTo(560 + 140 * Math.sin(y * 0.004) + 60 * C.fbm(y * 0.01, 3, 4), y);
+    p.lineTo(-100, 1560); p.lineTo(-100, 2200); p.closePath();
+    const g = c.createLinearGradient(0, 600, 0, 1900); g.addColorStop(0, '#3a2838'); g.addColorStop(1, '#0e0810'); c.fillStyle = g; c.fill(p);
+    c.save(); c.clip(p); c.globalAlpha = 0.25; c.globalCompositeOperation = 'overlay'; c.drawImage(C.grainTex('rock', 512, 512, 14), -100, 500, 1400, 1500); c.restore();
+    const rg = c.createRadialGradient(L.x, L.y, 40, L.x, L.y, 1400); rg.addColorStop(0, 'rgba(255,170,110,1)'); rg.addColorStop(1, 'rgba(255,170,110,0)');
+    c.save(); c.clip(p); c.strokeStyle = rg; c.lineWidth = 14; c.stroke(p); c.restore();
+  }
+  SH['19'] = (c, u, sh) => {                                    // the search party on the Vindhya cliff
+    const k = u / sh.length, L = { x: 260, y: 1290 };
+    c.save(); cam(c, lerp(1, 1.06, smooth(k)), 540, 1100);
+    vindhya(c, u, L);
+    cliff(c, u, L);
+    const ledge = new Path2D(); ledge.moveTo(-100, 1340); ledge.quadraticCurveTo(500, 1290, 1180, 1310); ledge.lineTo(1180, 2200); ledge.lineTo(-100, 2200); ledge.closePath();
+    c.fillStyle = '#0c080c'; c.fill(ledge);
+    const look = { dark: '#0a0608', rim: 'rgba(255,180,120,1)', rimW: 6 };
+    F.figure(c, { x: 240, y: 1335, h: 470, face: 1, kind: 'bear', build: 'big', staff: true }, { stance: 'stand', armN: [1.45, 0.1], armF: [1.5, 0.1], head: 0.15 }, L, u, look);
+    F.figure(c, { x: 560, y: 1318, h: 500, face: -1, kind: 'vanara', tail: true }, { stance: 'stand', armN: [1.4, 0.15], armF: [1.5, 0.1], head: -0.1 + 0.05 * Math.sin(u * 2) }, L, u, look);
+    F.figure(c, { x: 840, y: 1312, h: 580, face: -1, kind: 'vanara', tail: true, mace: true, build: 'big' }, { stance: 'stand', armN: [0.9, -0.6], armF: [1.5, 0.1], head: -0.05 }, L, u, look);
+    c.restore();
+  };
+  SH['20'] = (c, u, sh) => {                                    // Sampati in his cave hears his brother's name
+    const L = { x: 540, y: 700 }, ln = sh.lines[0], k = u / sh.length;
+    vindhya(c, u, { x: 540, y: 1290 });
+    const cave = new Path2D(); cave.rect(-50, -50, W + 100, H + 100);
+    cave.moveTo(150, 1500); cave.bezierCurveTo(120, 900, 360, 560, 560, 560); cave.bezierCurveTo(800, 560, 980, 900, 940, 1500); cave.closePath();
+    c.fillStyle = '#0a0608'; c.fill(cave, 'evenodd');
+    c.save(); c.clip(cave, 'evenodd'); c.globalAlpha = 0.3; c.globalCompositeOperation = 'overlay'; c.drawImage(C.grainTex('rock', 512, 512, 14), 0, 0, W, H); c.restore();
+    const lift = smooth((u - (ln ? ln.start : 0) + 0.2) / 0.6);
+    mode('real', null, () => bird(c, 520, 1300, 1.5, -0.05, { pose: { spread: 0.12, theta: 3.0, talons: 0.2, pitch: 0, tailSpread: 0.3, jaw: speaking(u, ln) * 0.7, grip: 1, wingScale: 0.32, headRot: lerp(0.4, -0.35, lift), neck: lerp(0.4, -0.35, lift) }, lag: 3.0 }, { pal: PALS.burnt, sad: true, brow: '#c8c0b8' }));
+    C.glow(c, 540, 700, 700, 'rgba(255,190,120,0.25)');
+  };
+  SH['21'] = (c, u, sh) => {                                    // tears
+    const k = u / sh.length;
+    C.sky(c, [[0, '#0a0608'], [1, '#1a0e10']]);
+    C.glow(c, 800, 500, 900, 'rgba(255,170,110,0.35)');
+    c.save(); cam(c, lerp(1, 1.08, smooth(k)), 540, 980);
+    mode('real', null, () => bird(c, 540 - 126 * 3.1, 1000 + 66 * 3.1, 3.1, -0.1, { pose: { spread: 0.1, theta: 3.0, talons: 0, pitch: 0, tailSpread: 0.3, jaw: 0, grip: 0, wingScale: 0.32, headRot: 0.15 }, lag: 3.0 }, { pal: PALS.burnt, sad: true, tear: smooth((u - 0.8) / 1) * ((u - 0.8) / 1.6), brow: '#c8c0b8', noLegs: true }));
+    c.restore();
+  };
+  SH['22'] = (c, u, sh) => {                                    // the divine sight: golden Lanka, then Sita
+    const k = u / sh.length, L = { x: 540, y: 1220 }, split = 0.58;
+    if (k < split) {
+      const q = k / split;
+      c.save(); cam(c, lerp(1, 1.55, smooth(q)), 540, lerp(1150, 1080, q));
+      C.sky(c, [[0, '#06081e'], [0.32, '#20204a'], [0.5, '#8a3a5a'], [0.6, '#f08a5a'], [0.65, '#ffc888'], [1, '#ffc888']]);
+      C.stars(c, 90, 0.8, u, 12, 700);
+      C.glow(c, L.x, L.y, 900, 'rgba(255,200,130,0.6)');
+      C.sea(c, 1230, u, '#2a2a50', '#04060e', 540, '255,210,140');
+      Lanka.lanka(c, 540, 1232, 0.42, u, 0.85, true);
+      C.fogBand(c, 1215, 120, 'rgba(255,190,150,1)', u, 21, 0.45);
+      c.restore();
+    } else {
+      const q = (k - split) / (1 - split), M = { x: 820, y: 360 };
+      c.save(); cam(c, lerp(1.0, 1.1, smooth(q)), 540, 1100);
+      C.sky(c, [[0, '#04061a'], [0.5, '#101838'], [1, '#1a1a2a']]);
+      C.stars(c, 120, 0.9, u, 13, 900);
+      c.fillStyle = '#f6f2e6'; c.beginPath(); c.arc(M.x, M.y, 56, 0, TAU); c.fill(); C.glow(c, M.x, M.y, 600, 'rgba(200,220,255,0.45)');
+      C.forestLine(c, 1350, 360, '#0a1210', 'rgba(200,220,255,0.6)', M, 22);
+      const gg = c.createLinearGradient(0, 1400, 0, H); gg.addColorStop(0, '#0e140e'); gg.addColorStop(1, '#030503'); c.fillStyle = gg; c.fillRect(-200, 1400, W + 400, H);
+      C.tree(c, 700, 1760, 1100, 31, '#0a120c', 'rgba(200,220,255,0.7)', M);
+      for (let i = 0; i < 60; i++) {                               // red Ashoka blossoms
+        const x = 700 + (hash(i, 91) - 0.5) * 600, y = 1760 - 1100 * (0.55 + 0.4 * hash(i, 92));
+        c.fillStyle = `rgba(230,60,50,${0.6 + 0.4 * hash(i, 93)})`; c.beginPath(); c.arc(x, y, 5 + 4 * hash(i, 94), 0, TAU); c.fill();
+      }
+      F.figure(c, { x: 520, y: 1720, h: 420, face: 1, kind: 'woman' }, { stance: 'sit', armN: [1.9, -1.2], armF: [1.4, 1.2], head: 0.3 }, M, u, { dark: '#06080a', rim: 'rgba(210,225,255,1)', rimW: 5 });
+      C.motes(c, u, 40, '200,255,170', 23, 0, 1000, W, 800);
+      c.restore();
+      const fi = 1 - smooth(q / 0.15); if (fi > 0) { c.fillStyle = `rgba(255,240,210,${fi})`; c.fillRect(0, 0, W, H); }
+    }
+  };
+  SH['23'] = (c, u, sh) => {                                    // new wings
+    const k = u / sh.length, g = smooth((u - 0.4) / 2.2), L = { x: 540, y: 880 };
+    C.sky(c, [[0, '#060a26'], [0.35, '#1c2a6a'], [0.6, '#a04a5a'], [1, '#ffb060']]);
+    C.stars(c, 80, 1 - g * 0.6, u, 14, H * 0.5);
+    C.glow(c, L.x, L.y, 1100, `rgba(255,230,170,${0.5 + 0.4 * g})`, 'rgba(255,180,90,0.3)');
+    C.rays(c, L.x, L.y, u, 0.16 + 0.2 * g, 22);
+    mode('real', null, () => bird(c, 540, 1040 - 120 * g, 1.3, -0.08, { pose: { spread: lerp(0.15, 1, g), theta: lerp(3.0, 4.45, g) + 0.05 * Math.sin(u * 6) * g, talons: 0.2, pitch: 0, tailSpread: lerp(0.3, 1, g), jaw: 0, grip: 0, wingScale: lerp(0.32, 1.25, g), headRot: -0.35 * g }, lag: lerp(3.0, 4.4, g) },
+      { pal: { feather: K.P.feather.map((x, i) => (PALS.golden.feather[i] || x)), featherFar: PALS.golden.featherFar, covert: PALS.golden.covert, body: PALS.golden.body } }));
+    C.motes(c, u, 60, '255,236,180', 24, 0, 300, W, 1400, 4);
+  };
+  SH['24'] = (c, u, sh) => {                                    // the brothers fly together again
+    const L = { x: 540, y: 1260 };
+    C.sky(c, [[0, '#060a2e'], [0.3, '#24286a'], [0.5, '#8a3a6e'], [0.6, '#f07a5a'], [0.68, '#ffc078'], [1, '#ffe0a8']]);
+    C.stars(c, 60, 0.7, u, 15, 600);
+    C.sun(c, L.x, L.y, 90); C.rays(c, L.x, L.y, u, 0.18, 18);
+    C.clouds(c, 1500, 520, u * 60, '#ffe6c0', '#6a3a66', { x: 0, y: -1 }, 1, 16, 4);
+    C.clouds(c, 1780, 600, u * 120, '#ffdcb8', '#4a2450', { x: 0, y: -1 }, 1, 17, 3);
+    c.save(); c.globalAlpha = 0.55 + 0.1 * Math.sin(u * 2);
+    C.glow(c, 780, 700, 360, 'rgba(255,255,240,0.6)');
+    mode('real', null, () => bird(c, 780 + 20 * Math.sin(u * 0.7), 700 + 20 * Math.sin(u * 1.1), 0.75, -0.12, flyPose(u, { freq: 1.3, amp: 0.7, phase: 0.5 }), { pal: PALS.spirit }));
+    c.restore();
+    mode('real', null, () => bird(c, 380 + 15 * Math.sin(u * 0.8), 960 + 25 * Math.sin(u * 1.2), 1.0, -0.1, flyPose(u, { freq: 1.4, amp: 0.8 }), { pal: { feather: PALS.golden.feather, featherFar: PALS.golden.featherFar, covert: PALS.golden.covert, body: PALS.golden.body } }));
+    C.motes(c, u, 30, '255,230,170', 25);
+  };
+  SH['25'] = (c, u, sh) => {                                    // end card
+    const L = { x: 540, y: 1300 };
+    C.sky(c, [[0, '#04040e'], [0.4, '#2a1030'], [0.62, '#b8483a'], [0.72, '#ffa050'], [1, '#ffd08a']]);
+    C.sun(c, L.x, L.y, 120); C.rays(c, L.x, L.y, u, 0.16, 18);
+    C.clouds(c, 1560, 500, u * 30, '#ffb880', '#2a0e20', { x: 0, y: -1 }, 1, 18, 4);
+    mode('sil', { dark: '#140608', rim: 'rgba(255,200,120,1)', w: 3 }, () => {
+      bird(c, lerp(300, 520, u / sh.length), lerp(1100, 1250, u / sh.length), lerp(0.5, 0.25, u / sh.length), 0.15, flyPose(u, { freq: 1.4 }), {});
+      bird(c, lerp(380, 560, u / sh.length), lerp(1160, 1280, u / sh.length), lerp(0.4, 0.2, u / sh.length), 0.15, flyPose(u, { freq: 1.6, phase: 0.4 }), {});
+    });
+    const a = smooth((u - 0.3) / 0.8);
+    c.save(); c.globalAlpha = a; c.textAlign = 'center'; c.textBaseline = 'middle';
+    const g = c.createLinearGradient(0, 380, 0, 520); g.addColorStop(0, '#fff6d0'); g.addColorStop(0.5, '#f4c058'); g.addColorStop(1, '#b8741a');
+    c.font = "140px 'Rozha One'"; c.shadowColor = 'rgba(255,170,80,0.7)'; c.shadowBlur = 40; c.fillStyle = g; c.fillText('जय श्री राम', W / 2, 460);
+    c.shadowBlur = 0; c.globalAlpha = a * smooth((u - 1.2) / 0.8); c.font = "700 46px 'Noto Sans Devanagari'"; c.fillStyle = '#f6e2c8';
+    c.fillText('ऐसी ही और कथाओं के लिए — Follow करें', W / 2, 600);
+    c.restore();
+    const out = smooth((u - sh.length + 1) / 1); if (out > 0) { c.fillStyle = `rgba(0,0,0,${out})`; c.fillRect(0, 0, W, H); }
+  };
+
+  // ---------------------------------------------------------------- captions, post, frame
+  function captions(c, t) {
+    const sh = TL.shots[shotIndex(t)];
+    for (const ln of sh.lines) {
+      const a0 = sh.start + ln.start - 0.1, a1 = sh.start + ln.end + 0.25;
+      if (t < a0 || t > a1) continue;
+      const a = smooth((t - a0) / 0.2) * (1 - smooth((t - a1 + 0.2) / 0.2));
+      c.save(); c.globalAlpha = a; c.textAlign = 'center'; c.textBaseline = 'middle';
+      c.font = "700 50px 'Noto Sans Devanagari'";
+      let lines = [ln.text];
+      if (c.measureText(ln.text).width > 940) {
+        const w = ln.text.split(' '); let best = 1, bd = 1e9;
+        for (let i = 1; i < w.length; i++) { const d = Math.abs(c.measureText(w.slice(0, i).join(' ')).width - c.measureText(w.slice(i).join(' ')).width); if (d < bd) { bd = d; best = i; } }
+        lines = [w.slice(0, best).join(' '), w.slice(best).join(' ')];
+      }
+      const y0 = 1440 - (lines.length - 1) * 34;
+      if (ln.who) { c.font = "700 40px 'Noto Sans Devanagari'"; c.fillStyle = '#ffcc66'; c.strokeStyle = 'rgba(0,0,0,0.85)'; c.lineWidth = 9; c.lineJoin = 'round'; c.strokeText(ln.who, W / 2, y0 - 66); c.fillText(ln.who, W / 2, y0 - 66); c.font = "700 50px 'Noto Sans Devanagari'"; }
+      lines.forEach((s, i) => { const y = y0 + i * 68; c.lineJoin = 'round'; c.strokeStyle = 'rgba(0,0,0,0.88)'; c.lineWidth = 11; c.strokeText(s, W / 2, y); c.fillStyle = '#ffffff'; c.fillText(s, W / 2, y); });
+      c.restore();
+    }
+  }
+  function post(c, f) {
+    bctx.filter = 'blur(8px) brightness(0.95) contrast(1.5)'; bctx.clearRect(0, 0, bloom.width, bloom.height); bctx.drawImage(canvas, 0, 0, bloom.width, bloom.height);
+    c.save();
+    c.globalCompositeOperation = 'screen'; c.globalAlpha = 0.22; c.drawImage(bloom, 0, 0, W, H);
+    c.globalCompositeOperation = 'soft-light'; c.globalAlpha = 0.25;                                       // filmic grade
+    const g = c.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#1a2a5a'); g.addColorStop(0.5, '#808080'); g.addColorStop(1, '#d89a5a'); c.fillStyle = g; c.fillRect(0, 0, W, H);
+    c.globalCompositeOperation = 'source-over'; c.globalAlpha = 1;
+    const v = c.createRadialGradient(W / 2, H * 0.48, H * 0.3, W / 2, H * 0.5, H * 0.78); v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,0.6)');
+    c.fillStyle = v; c.fillRect(0, 0, W, H);
+    const d = gdata.data; for (let i = 0, n = d.length / 4; i < n; i++) { const q = 100 + 56 * hash(f, i, 91); d[4 * i] = d[4 * i + 1] = d[4 * i + 2] = q; d[4 * i + 3] = 255; }
+    gctx.putImageData(gdata, 0, 0); c.globalCompositeOperation = 'overlay'; c.globalAlpha = 0.18; c.drawImage(grain, 0, 0, W, H);
+    c.restore();
+  }
+  function shotIndex(t) { for (let i = TL.shots.length - 1; i >= 0; i--) if (t >= TL.shots[i].start) return i; return 0; }
+  const HARD = new Set(['13', '14', '15', '16']);                   // hard cuts in the fight
+  function drawShot(c, i, t) {
+    const sh = TL.shots[i];
+    c.save(); c.setTransform(1, 0, 0, 1, 0, 0); c.globalAlpha = 1; c.globalCompositeOperation = 'source-over'; c.filter = 'none';
+    K.setMode('cel'); SH[sh.id](c, Math.max(0, t - sh.start), sh); K.setMode('cel');
+    c.restore();
+  }
+  function renderFrame(t) {
+    const f = Math.round(t * FPS);
+    ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over'; ctx.filter = 'none';
+    const i = shotIndex(t);
+    drawShot(ctx, i, t);
+    if (i + 1 < TL.shots.length && !HARD.has(TL.shots[i + 1].id)) {
+      const b = TL.shots[i + 1].start, k = (t - (b - 0.45)) / 0.45;
+      if (k > 0 && k < 1) { const bb = bufB.getContext('2d'); drawShot(bb, i + 1, t); ctx.globalAlpha = smooth(k); ctx.drawImage(bufB, 0, 0); ctx.globalAlpha = 1; }
+    }
+    post(ctx, f);
+    captions(ctx, t);
+  }
+  window.renderFrame = renderFrame; window.TOTAL = TL.total;
+  Promise.all([document.fonts.load("700 50px 'Noto Sans Devanagari'", 'जटायु'), document.fonts.load("64px 'Rozha One'", 'जटायु')]).then(() => {
+    // warm the noise caches so the first frame of every worker is the same
+    C.cloudTex('cl1:5', 640, 240, 5, 0.42, 0.7); C.grainTex('rock', 512, 512, 14);
+    window.__ready = true;
+    const params = new URLSearchParams(location.search);
+    if (params.has('render')) { document.body.classList.add('render'); return; }
+    if (params.has('t')) { renderFrame(+params.get('t')); return; }
+    const t0 = performance.now();
+    (function loop(now) { renderFrame(Math.floor(((now - t0) / 1000 % TL.total) * FPS) / FPS); requestAnimationFrame(loop); })(t0);
+  });
+})();
+</script>
+</body>
+</html>

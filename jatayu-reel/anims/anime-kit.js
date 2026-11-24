@@ -35,7 +35,32 @@
    * Three-tone cel fill. L = unit vector toward the light in the current local coords.
    * a = shadow depth, b = rim-light width, lw = ink width.
    */
+  // Render modes: 'cel' (default anime), 'real' (soft painted, no ink lines),
+  // 'sil' (backlit silhouette: dark body with a rim of light on the lit edge).
+  let MODE = 'cel', SIL = { dark: '#120a10', rim: 'rgba(255,200,120,1)', w: 3.5 };
+  function setMode(m, opt) { MODE = m; if (opt) SIL = Object.assign({}, SIL, opt); }
+  const mixC = (a, b, u) => {
+    const h = (x) => [1, 3, 5].map((i) => parseInt(x.slice(i, i + 2), 16));
+    if (a[0] !== '#' || b[0] !== '#') return a;
+    const A = h(a), B = h(b);
+    return '#' + A.map((v, i) => Math.round(v + (B[i] - v) * u).toString(16).padStart(2, '0')).join('');
+  };
   function cel3(c, path, pal, L, a = 6, b = 3, lw = 0) {
+    if (MODE === 'sil') {
+      c.save(); c.clip(path);
+      c.fillStyle = SIL.rim; c.fillRect(-1e4, -1e4, 2e4, 2e4);
+      c.translate(-L.x * SIL.w, -L.y * SIL.w); c.fillStyle = SIL.dark; c.fill(path);
+      c.restore();
+      return;
+    }
+    if (MODE === 'real') {                         // soft two-tone, no outline
+      c.save(); c.clip(path);
+      c.fillStyle = mixC(pal[2], pal[1], 0.35); c.fillRect(-1e4, -1e4, 2e4, 2e4);
+      c.translate(L.x * a * 1.4, L.y * a * 1.4); c.fillStyle = pal[1]; c.fill(path);
+      c.translate(L.x * a * 0.8, L.y * a * 0.8); c.globalAlpha *= 0.35; c.fillStyle = pal[0]; c.fill(path);
+      c.restore();
+      return;
+    }
     // shadow everywhere; rim = (path shifted toward light) minus (path shifted away);
     // base = intersection of both. Built from nested clips, so unions of puffs work.
     c.save();
@@ -446,6 +471,6 @@
     }
     c.restore();
   }
-  global.AnimeKit = { INK, P, LW, rot, cel3, viman, drawJatayu, drawBird, feather, wing, legDraw, head,
+  global.AnimeKit = { setMode, INK, P, LW, rot, cel3, viman, drawJatayu, drawBird, feather, wing, legDraw, head,
                       birds, burstFeathers, speedLines, starBurst, radialLines, bell };
 })(typeof window !== 'undefined' ? window : globalThis);

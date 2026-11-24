@@ -22,11 +22,12 @@ const opt = (n, d) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] :
 const WORKERS = Number(opt('--workers', Math.max(1, os.cpus().length)));
 const FPS = 30;
 const tmp = join(here, '.render'); mkdirSync(tmp, { recursive: true });
-const out = resolve(here, '..', 'reel', 'sampati-jatayu.mp4');
+const arg = (k, d) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : d; };
+const out = resolve(here, '..', 'reel', arg('--out', 'sampati-jatayu.mp4'));
 mkdirSync(dirname(out), { recursive: true });
 
 const browser = await chromium.launch();
-const url = pathToFileURL(join(here, 'story.html')).href + '?render';
+const url = pathToFileURL(join(here, arg('--html', 'story.html'))).href + '?render';
 const probe = await browser.newPage();
 await probe.goto(url); await probe.waitForFunction(() => window.__ready === true);
 const TOTAL = await probe.evaluate(() => window.TOTAL); await probe.close();
@@ -58,7 +59,7 @@ const parts = await Promise.all(Array.from({ length: WORKERS }, (_, k) => chunk(
 await browser.close();
 writeFileSync(join(tmp, 'list.txt'), parts.map((p) => `file '${p}'`).join('\n'));
 execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', join(tmp, 'list.txt'),
-  '-i', join(here, 'audio', 'mix.wav'), '-map', '0:v', '-map', '1:a', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
+  '-i', join(here, arg('--audio', 'audio/mix.wav')), '-map', '0:v', '-map', '1:a', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
   '-shortest', '-movflags', '+faststart', out]);
 rmSync(tmp, { recursive: true, force: true });
 console.log(`wrote ${out} in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
