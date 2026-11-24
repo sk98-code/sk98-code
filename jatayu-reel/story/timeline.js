@@ -1,20 +1,53 @@
 window.TIMELINE = {
- "total": 162.574,
+ "total": 173.683,
  "items": [
   {
    "kind": "hook",
-   "length": 6.4,
+   "length": 10.467551,
+   "cues": [
+    {
+     "text": "एक भाई ने अपने भाई के लिए...",
+     "start": 0.25,
+     "end": 2.051
+    },
+    {
+     "text": "पंख जला दिए।",
+     "start": 2.051,
+     "end": 3.341
+    },
+    {
+     "text": "दूसरे ने सीता माँ के लिए...",
+     "start": 3.341,
+     "end": 6.131
+    },
+    {
+     "text": "पंख कटवा दिए!",
+     "start": 6.131,
+     "end": 7.681
+    },
+    {
+     "text": "और ये दोनों...",
+     "start": 7.681,
+     "end": 8.944
+    },
+    {
+     "text": "सगे भाई थे।",
+     "start": 8.944,
+     "end": 9.968
+    }
+   ],
+   "noCaption": true,
    "start": 0
   },
   {
    "kind": "title",
    "length": 3.2,
-   "start": 6.4
+   "start": 10.468
   },
   {
    "kind": "scene",
    "id": 1,
-   "length": 8.972449000000001,
+   "length": 8.572449,
    "voiceDur": 6.922449,
    "cues": [
     {
@@ -33,12 +66,12 @@ window.TIMELINE = {
      "end": 7.372
     }
    ],
-   "start": 9.6
+   "start": 13.668
   },
   {
    "kind": "scene",
    "id": 2,
-   "length": 10.565917999999998,
+   "length": 10.165917999999998,
    "voiceDur": 8.515918,
    "cues": [
     {
@@ -62,12 +95,12 @@ window.TIMELINE = {
      "end": 8.966
     }
    ],
-   "start": 18.572
+   "start": 22.24
   },
   {
    "kind": "scene",
    "id": 3,
-   "length": 19.324286,
+   "length": 18.924286,
    "voiceDur": 16.274286,
    "cues": [
     {
@@ -106,7 +139,7 @@ window.TIMELINE = {
      "end": 16.724
     }
    ],
-   "start": 29.138
+   "start": 32.406
   },
   {
    "kind": "card",
@@ -115,44 +148,87 @@ window.TIMELINE = {
     "पर असली परीक्षा...",
     "अभी बाकी थी"
    ],
-   "length": 3.6,
-   "start": 48.463
+   "length": 4.317551,
+   "noCaption": true,
+   "start": 51.33
   },
   {
    "kind": "scene",
    "id": 4,
-   "length": 42.202653,
+   "length": 46.702653,
    "voiceDur": 16.352653,
    "fight": {
     "from": 9.969,
-    "to": 37.052,
+    "to": 41.552,
     "beats": {
      "crown": 0,
      "arrows": [
-      4.2,
-      5,
-      5.8
+      6,
+      7,
+      8
      ],
-     "bow": 8.6,
-     "slashIn": 9.6,
-     "slash": 10.2,
-     "slashOut": 11.8,
+     "bow": 11.4,
+     "slashIn": 13.8,
+     "slash": 14.4,
+     "slashOut": 16.2,
      "buffet": [
-      12.4,
-      13
+      16.8,
+      17.4
      ],
-     "cryIn": 14.2,
-     "cry": 14.4,
-     "cryOut": 16,
-     "draw": 16.8,
+     "cryIn": 18.4,
+     "cry": 18.6,
+     "cryOut": 20.2,
+     "draw": 23,
      "swings": [
-      18.2,
-      19.8
+      24.6,
+      26.2
      ],
-     "charge": 21.2
+     "charge": 27.4
     }
    },
    "split": 12.551615887218045,
+   "extraCues": [
+    {
+     "text": "जटायु ने झपटकर,",
+     "start": 10.219,
+     "end": 11.369
+    },
+    {
+     "text": "रावण का मुकुट गिरा दिया!",
+     "start": 11.369,
+     "end": 13.85
+    },
+    {
+     "text": "रावण ने बाणों की वर्षा कर दी...",
+     "start": 14.069,
+     "end": 16.78
+    },
+    {
+     "text": "पर बूढ़ा जटायु, हर बाण से बच निकला!",
+     "start": 16.78,
+     "end": 20.338
+    },
+    {
+     "text": "उसने अपनी चोंच से रावण का धनुष तोड़ डाला...",
+     "start": 20.569,
+     "end": 23.517
+    },
+    {
+     "text": "और पंजों से उसका कवच चीर दिया!",
+     "start": 23.517,
+     "end": 26.447
+    },
+    {
+     "text": "तब क्रोध से पागल रावण ने,",
+     "start": 30.569,
+     "end": 32.525
+    },
+    {
+     "text": "अपनी चंद्रहास तलवार निकाली...",
+     "start": 32.525,
+     "end": 35.323
+    }
+   ],
    "cues": [
     {
      "text": "बरसों बीत गए।",
@@ -181,21 +257,21 @@ window.TIMELINE = {
     },
     {
      "text": "पर रावण ने अपनी तलवार से...",
-     "start": 37.052,
-     "end": 39.218
+     "start": 41.552,
+     "end": 43.718
     },
     {
      "text": "उसके पंख काट दिए।",
-     "start": 39.218,
-     "end": 40.803
+     "start": 43.718,
+     "end": 45.303
     }
    ],
-   "start": 52.063
+   "start": 55.648
   },
   {
    "kind": "scene",
    "id": 5,
-   "length": 14.725918,
+   "length": 14.125917999999999,
    "voiceDur": 11.075918,
    "cues": [
     {
@@ -219,12 +295,12 @@ window.TIMELINE = {
      "end": 11.526
     }
    ],
-   "start": 94.265
+   "start": 102.35
   },
   {
    "kind": "scene",
    "id": 6,
-   "length": 17.644286,
+   "length": 17.244286,
    "voiceDur": 14.994286,
    "cues": [
     {
@@ -268,7 +344,7 @@ window.TIMELINE = {
      "end": 15.444
     }
    ],
-   "start": 108.991
+   "start": 116.476
   },
   {
    "kind": "card",
@@ -278,13 +354,14 @@ window.TIMELINE = {
     "वो हुआ जिसकी",
     "किसी ने कल्पना भी नहीं की थी"
    ],
-   "length": 4.2,
-   "start": 126.636
+   "length": 5.989388,
+   "noCaption": true,
+   "start": 133.721
   },
   {
    "kind": "scene",
    "id": 7,
-   "length": 13.647551,
+   "length": 13.247551,
    "voiceDur": 10.997551,
    "cues": [
     {
@@ -318,12 +395,12 @@ window.TIMELINE = {
      "end": 11.448
     }
    ],
-   "start": 130.836
+   "start": 139.71
   },
   {
    "kind": "scene",
    "id": 8,
-   "length": 14.290816,
+   "length": 13.690816,
    "voiceDur": 10.840816,
    "cues": [
     {
@@ -347,17 +424,19 @@ window.TIMELINE = {
      "end": 11.291
     }
    ],
-   "start": 144.483
+   "start": 152.958
   },
   {
    "kind": "card",
    "id": "end",
    "lines": [
     "ऐसी और कथाओं के लिए",
-    "Follow करें"
+    "Follow करें",
+    "जय श्री राम"
    ],
-   "length": 3.8,
-   "start": 158.774
+   "length": 7.034286,
+   "noCaption": true,
+   "start": 166.648
   }
  ]
 };

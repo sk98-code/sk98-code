@@ -21,10 +21,10 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const A = (f) => join(here, 'audio', f);
 
-const HOOK = 6.4, TITLE = 3.2, CARD = 3.6, OUTRO = 3.8;
+const TITLE = 3.2;
 const LEAD = 0.45;
-const TAIL = [1.6, 1.6, 2.6, 1.4, 3.2, 2.2, 2.2, 3.0];
-const FIGHT = 24;                       // seconds of fight inserted into scene 4
+const TAIL = [1.2, 1.2, 2.2, 1.4, 2.6, 1.8, 1.8, 2.4];
+const FIGHT = 28.5;                     // seconds of fight inserted into scene 4
 
 const CAPTIONS = [
   ['सूर्य के सारथी अरुण के दो पुत्र थे...', 'बड़ा भाई सम्पाती,', 'और छोटा भाई जटायु।'],
@@ -43,11 +43,19 @@ const CAPTIONS = [
 
 // fight beats, seconds after Jatayu's first strike (shared with story.html)
 const BEATS = {
-  crown: 0.0, arrows: [4.2, 5.0, 5.8], bow: 8.6,
-  slashIn: 9.6, slash: 10.2, slashOut: 11.8,
-  buffet: [12.4, 13.0], cryIn: 14.2, cry: 14.4, cryOut: 16.0,
-  draw: 16.8, swings: [18.2, 19.8], charge: 21.2,
+  crown: 0.0, arrows: [6.0, 7.0, 8.0], bow: 11.4,
+  slashIn: 13.8, slash: 14.4, slashOut: 16.2,
+  buffet: [16.8, 17.4], cryIn: 18.4, cry: 18.6, cryOut: 20.2,
+  draw: 23.0, swings: [24.6, 26.2], charge: 27.4,
 };
+// narrated lines inside the fight: [file, start (s after first strike), caption chunks]
+const FIGHT_LINES = [
+  ['f1.mp3', 0.25, ['जटायु ने झपटकर,', 'रावण का मुकुट गिरा दिया!']],
+  ['f2.mp3', 4.1, ['रावण ने बाणों की वर्षा कर दी...', 'पर बूढ़ा जटायु, हर बाण से बच निकला!']],
+  ['f3.mp3', 10.6, ['उसने अपनी चोंच से रावण का धनुष तोड़ डाला...', 'और पंजों से उसका कवच चीर दिया!']],
+  ['f4.mp3', 20.6, ['तब क्रोध से पागल रावण ने,', 'अपनी चंद्रहास तलवार निकाली...']],
+];
+const HOOK_LINES = ['एक भाई ने अपने भाई के लिए...', 'पंख जला दिए।', 'दूसरे ने सीता माँ के लिए...', 'पंख कटवा दिए!', 'और ये दोनों...', 'सगे भाई थे।'];
 
 const duration = (f) => Number(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', f]).toString());
 
@@ -70,17 +78,35 @@ function speechMap(dur, sil) {
   return (u) => { let need = u * total; for (const [a, b] of islands) { if (need <= b - a) return a + need; need -= b - a; } return dur; };
 }
 
+function clipCues(file, chunks, offset) {
+  const dur = duration(file), map = speechMap(dur, silences(file, dur));
+  const weights = chunks.map((c) => c.replace(/[\s.,—!?।]/g, '').length);
+  const total = weights.reduce((a, b) => a + b, 0);
+  let acc = 0;
+  return { dur, cues: chunks.map((text, k) => { const a = map(acc / total); acc += weights[k]; return { text, start: +(offset + a).toFixed(3), end: +(offset + map(acc / total)).toFixed(3) }; }) };
+}
+
 const items = [];
 const voices = [];
 let t = 0;
 const push = (it) => { it.start = +t.toFixed(3); items.push(it); t += it.length; return it; };
 
-push({ kind: 'hook', length: HOOK });
+{
+  const h = clipCues(A('hook.mp3'), HOOK_LINES, 0.25);
+  const it = push({ kind: 'hook', length: 0.25 + h.dur + 0.5, cues: h.cues, noCaption: true });
+  voices.push({ file: A('hook.mp3'), at: it.start + 0.25 });
+}
 push({ kind: 'title', length: TITLE });
 const scenes = [];
+function card(id, file, lines) {
+  const d = duration(A(file));
+  const it = push({ kind: 'card', id, lines, length: 0.4 + d + 0.6, noCaption: true });
+  voices.push({ file: A(file), at: it.start + 0.4 });
+  return it;
+}
 for (let i = 0; i < 8; i++) {
-  if (i === 3) push({ kind: 'card', id: 'c1', lines: ['पर असली परीक्षा...', 'अभी बाकी थी'], length: CARD });
-  if (i === 6) push({ kind: 'card', id: 'c2', lines: ['और फिर...', 'वो हुआ जिसकी', 'किसी ने कल्पना भी नहीं की थी'], length: CARD + 0.6 });
+  if (i === 3) card('c1', 'c1.mp3', ['पर असली परीक्षा...', 'अभी बाकी थी']);
+  if (i === 6) card('c2', 'c2.mp3', ['और फिर...', 'वो हुआ जिसकी', 'किसी ने कल्पना भी नहीं की थी']);
   const f = A(`s${i + 1}.mp3`);
   const dur = duration(f);
   const map = speechMap(dur, silences(f, dur));
@@ -99,16 +125,24 @@ for (let i = 0; i < 8; i++) {
     sc.length += FIGHT;
     sc.fight = { from: +(cues[4].start + 0.9).toFixed(3), to: +cues[5].start.toFixed(3), beats: BEATS };
     sc.split = split;
+    sc.fightVoices = []; sc.extraCues = [];
+    for (const [file, at, chunks] of FIGHT_LINES) {
+      const fc = clipCues(A(file), chunks, sc.fight.from + at);
+      sc.extraCues.push(...fc.cues);
+      sc.fightVoices.push({ file: A(file), rel: sc.fight.from + at });
+    }
   }
   sc.cues = cues.map((q) => ({ text: q.text, start: +q.start.toFixed(3), end: +q.end.toFixed(3) }));
   push(sc);
   if (i === 3) {
     voices.push({ file: f, at: sc.start + LEAD, from: 0, to: sc.split });
     voices.push({ file: f, at: sc.start + LEAD + sc.split + FIGHT, from: sc.split });
+    for (const v of sc.fightVoices) voices.push({ file: v.file, at: sc.start + v.rel });
+    delete sc.fightVoices;
   } else voices.push({ file: f, at: sc.start + LEAD });
   scenes.push(sc);
 }
-push({ kind: 'card', id: 'end', lines: ['ऐसी और कथाओं के लिए', 'Follow करें'], length: OUTRO });
+card('end', 'end.mp3', ['ऐसी और कथाओं के लिए', 'Follow करें', 'जय श्री राम']);
 
 const TOTAL = +t.toFixed(3);
 writeFileSync(join(here, 'timeline.js'), `window.TIMELINE = ${JSON.stringify({ total: TOTAL, items }, null, 1)};\n`);
@@ -156,8 +190,9 @@ const at = (kind, time, vol = 1) => {
   }
 };
 // hook: a boom on every teaser cut, riser into the title
-for (const h of [0.05, 1.6, 3.2, 4.8]) { at('boom', h, 0.9); at('whoosh', Math.max(0, h - 0.25), 0.7); }
-at('riser', HOOK - 2.2, 0.8); at('boom', HOOK, 1);
+const HK = items[0];
+for (const k of [0, 2, 4, 5]) { const h = HK.cues[k].start; at('boom', h, 0.8); at('whoosh', Math.max(0, h - 0.25), 0.6); }
+at('riser', HK.length - 2.2, 0.7); at('boom', HK.length, 1);
 // cards
 for (const it of items.filter((x) => x.kind === 'card')) { at('riser', it.start - 1.4, 0.5); at('boom', it.start + 0.1, 0.8); }
 // story hits
